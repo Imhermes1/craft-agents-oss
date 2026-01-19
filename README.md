@@ -5,7 +5,7 @@
 
 A powerful AI assistant desktop app built on the Anthropic Claude Agent SDK. Manage documents, connect to external services, and automate workflows — all through natural conversation with Claude.
 
-![Craft Agents Desktop App](apps/marketing/src/assets/desktop/screenshot.jpg)
+<img width="1578" height="894" alt="image" src="https://github.com/user-attachments/assets/3f1f2fe8-7cf6-4487-99ff-76f6c8c0a3fb" />
 
 ## Installation
 
