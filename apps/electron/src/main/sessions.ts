@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { rm, readFile } from 'fs/promises'
 import { CraftAgent, type AgentEvent, setPermissionMode, type PermissionMode, unregisterSessionScopedToolCallbacks, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest } from '@craft-agent/shared/agent'
+import { OpenRouterRuntime } from '@craft-agent/shared/agent/openrouter-runtime'
 import { sessionLog, isDebugMode, getLogFilePath } from './logger'
 import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import type { WindowManager } from './window-manager'
@@ -124,12 +125,14 @@ async function buildServersFromSources(sources: LoadedSource[]) {
 interface ManagedSession {
   id: string
   workspace: Workspace
-  agent: CraftAgent | null  // Lazy-loaded - null until first message
+  agent: CraftAgent | OpenRouterRuntime | null  // Lazy-loaded - null until first message
   messages: Message[]
   isProcessing: boolean
   lastMessageAt: number
   streamingText: string
   abortController?: AbortController
+  /** Runtime to use for this session ('claude' or 'openrouter-chat'). Defaults to 'claude'. */
+  runtime?: 'claude' | 'openrouter-chat'
   // Track tool_use_id -> toolName mapping (since tool_result only has toolUseId)
   pendingTools: Map<string, string>
   // Stack of parent tool IDs for nested tool calls (e.g., Task spawning Read/Grep)
@@ -1158,10 +1161,35 @@ export class SessionManager {
   /**
    * Get or create agent for a session (lazy loading)
    */
-  private async getOrCreateAgent(managed: ManagedSession): Promise<CraftAgent> {
+  private async getOrCreateAgent(managed: ManagedSession): Promise<CraftAgent | OpenRouterRuntime> {
     if (!managed.agent) {
       const end = perf.start('agent.create', { sessionId: managed.id })
       const config = loadStoredConfig()
+
+      // Branch based on runtime
+      if (managed.runtime === 'openrouter-chat') {
+        // Create OpenRouter runtime
+        managed.agent = new OpenRouterRuntime({
+          workspace: managed.workspace,
+          model: managed.model || 'openai/gpt-4o',
+          thinkingLevel: managed.thinkingLevel,
+          session: {
+            id: managed.id,
+            workspaceRootPath: managed.workspace.rootPath,
+            sdkSessionId: managed.sdkSessionId,
+            createdAt: managed.lastMessageAt,
+            lastUsedAt: managed.lastMessageAt,
+            workingDirectory: managed.workingDirectory,
+            sdkCwd: managed.sdkCwd,
+            model: managed.model,
+            runtime: 'openrouter-chat',
+          },
+        }) as any
+        end()
+        return managed.agent
+      }
+
+      // Create Claude Agent SDK runtime (default)
       managed.agent = new CraftAgent({
         workspace: managed.workspace,
         // Session model takes priority, fallback to global config

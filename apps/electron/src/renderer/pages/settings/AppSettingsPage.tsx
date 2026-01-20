@@ -348,6 +348,13 @@ export default function AppSettingsPage() {
   const [isWaitingForCode, setIsWaitingForCode] = useState(false)
   const [authCode, setAuthCode] = useState('')
 
+  // OpenRouter API Key state
+  const [openRouterKeyValue, setOpenRouterKeyValue] = useState('')
+  const [openRouterKeyDialogOpen, setOpenRouterKeyDialogOpen] = useState(false)
+  const [isSavingOpenRouterKey, setIsSavingOpenRouterKey] = useState(false)
+  const [openRouterKeyError, setOpenRouterKeyError] = useState<string | undefined>()
+  const [hasOpenRouterKey, setHasOpenRouterKey] = useState(false)
+
   // Notifications state
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
 
@@ -461,6 +468,32 @@ export default function AppSettingsPage() {
       setIsSavingApiKey(false)
     }
   }, [apiKeyValue])
+
+  // Save OpenRouter API key
+  const handleSaveOpenRouterKey = useCallback(async () => {
+    if (!window.electronAPI || !openRouterKeyValue.trim()) return
+
+    setIsSavingOpenRouterKey(true)
+    setOpenRouterKeyError(undefined)
+    try {
+      await window.electronAPI.setCredential({ type: 'openrouter_api_key' }, openRouterKeyValue.trim())
+      setHasOpenRouterKey(true)
+      setOpenRouterKeyValue('')
+      setOpenRouterKeyDialogOpen(false)
+      toast.success('OpenRouter API key saved')
+    } catch (error) {
+      console.error('Failed to save OpenRouter key:', error)
+      setOpenRouterKeyError(error instanceof Error ? error.message : 'Failed to save API key')
+    } finally {
+      setIsSavingOpenRouterKey(false)
+    }
+  }, [openRouterKeyValue])
+
+  const handleCancelOpenRouterKey = useCallback(() => {
+    setOpenRouterKeyDialogOpen(false)
+    setOpenRouterKeyValue('')
+    setOpenRouterKeyError(undefined)
+  }, [])
 
   // Use existing Claude token
   const handleUseExistingClaudeToken = useCallback(async () => {
@@ -698,6 +731,45 @@ export default function AppSettingsPage() {
                       isWaitingForCode={false}
                     />
                   )}
+                </DialogContent>
+              </Dialog>
+            </SettingsSection>
+
+            {/* OpenRouter */}
+            <SettingsSection title="OpenRouter" description="Configure OpenRouter for Chat mode">
+              <SettingsCard>
+                <SettingsRow
+                  label="API Key"
+                  description={hasOpenRouterKey ? 'API key configured' : 'Not configured'}
+                >
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setOpenRouterKeyDialogOpen(true)}
+                  >
+                    {hasOpenRouterKey ? 'Update Key' : 'Add Key'}
+                  </Button>
+                </SettingsRow>
+              </SettingsCard>
+
+              {/* OpenRouter API Key Dialog */}
+              <Dialog open={openRouterKeyDialogOpen} onOpenChange={(open) => !open && handleCancelOpenRouterKey()}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>OpenRouter API Key</DialogTitle>
+                    <DialogDescription>
+                      Configure your OpenRouter API key for Chat mode
+                    </DialogDescription>
+                  </DialogHeader>
+                  <ApiKeyDialogContent
+                    value={openRouterKeyValue}
+                    onChange={setOpenRouterKeyValue}
+                    onSave={handleSaveOpenRouterKey}
+                    onCancel={handleCancelOpenRouterKey}
+                    isSaving={isSavingOpenRouterKey}
+                    hasExistingKey={hasOpenRouterKey}
+                    error={openRouterKeyError}
+                  />
                 </DialogContent>
               </Dialog>
             </SettingsSection>

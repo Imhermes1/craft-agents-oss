@@ -20,12 +20,15 @@ import { StoplightProvider } from '@/context/StoplightContext'
 import {
   useNavigationState,
   isChatsNavigation,
+  isChatNavigation,
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
 } from '@/contexts/NavigationContext'
 import { AppSettingsPage, WorkspaceSettingsPage, PermissionsSettingsPage, PreferencesPage, ShortcutsPage, SourceInfoPage, ChatPage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
+import ChatModePage from '@/pages/ChatModePage'
+import { MessageSquare } from 'lucide-react'
 
 export interface MainContentPanelProps {
   /** Whether the app is in focused mode (single chat, no sidebar) */
@@ -124,6 +127,27 @@ export function MainContentPanel({
       <Panel variant="grow" className={className}>
         <div className="flex items-center justify-center h-full text-muted-foreground">
           <p className="text-sm">No skills configured</p>
+        </div>
+      </Panel>
+    )
+  }
+
+  // Chat navigator (OpenRouter chat mode) - show chat or empty state
+  if (isChatNavigation(navState)) {
+    if (navState.details) {
+      return wrapWithStoplight(
+        <Panel variant="grow" className={className}>
+          <ChatModePage sessionId={navState.details.sessionId} />
+        </Panel>
+      )
+    }
+    // No session selected - empty state
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
+          <MessageSquare className="h-8 w-8 text-muted-foreground/50" />
+          <p className="text-sm">No chat selected</p>
+          <p className="text-xs text-muted-foreground/70">Select a chat or create a new one</p>
         </div>
       </Panel>
     )

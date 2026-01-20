@@ -33,7 +33,7 @@ export interface ParsedRoute {
 // Compound Route Types (new format)
 // =============================================================================
 
-export type NavigatorType = 'chats' | 'sources' | 'skills' | 'settings'
+export type NavigatorType = 'chats' | 'chat' | 'sources' | 'skills' | 'settings'
 
 export interface ParsedCompoundRoute {
   /** The navigator type */
@@ -55,7 +55,7 @@ export interface ParsedCompoundRoute {
  * Known prefixes that indicate a compound route
  */
 const COMPOUND_ROUTE_PREFIXES = [
-  'allChats', 'flagged', 'state', 'sources', 'skills', 'settings'
+  'allChats', 'flagged', 'state', 'chat', 'sources', 'skills', 'settings'
 ]
 
 /**
@@ -129,6 +129,23 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
     return null
   }
 
+  // Chat navigator (OpenRouter chat mode)
+  if (first === 'chat') {
+    if (segments.length === 1) {
+      return { navigator: 'chat', details: null }
+    }
+
+    // chat/session/{sessionId}
+    if (segments[1] === 'session' && segments[2]) {
+      return {
+        navigator: 'chat',
+        details: { type: 'chat', id: segments[2] },
+      }
+    }
+
+    return null
+  }
+
   // Chats navigator (allChats, flagged, state)
   let chatFilter: ChatFilter
   let detailsStartIndex: number
@@ -189,6 +206,11 @@ export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
   if (parsed.navigator === 'skills') {
     if (!parsed.details) return 'skills'
     return `skills/skill/${parsed.details.id}`
+  }
+
+  if (parsed.navigator === 'chat') {
+    if (!parsed.details) return 'chat'
+    return `chat/session/${parsed.details.id}`
   }
 
   // Chats navigator
@@ -407,6 +429,17 @@ function convertCompoundToNavigationState(compound: ParsedCompoundRoute): Naviga
     }
   }
 
+  // Chat (OpenRouter chat mode)
+  if (compound.navigator === 'chat') {
+    if (!compound.details) {
+      return { navigator: 'chat', details: null }
+    }
+    return {
+      navigator: 'chat',
+      details: { type: 'chat', sessionId: compound.details.id },
+    }
+  }
+
   // Chats
   const filter = compound.chatFilter || { kind: 'allChats' as const }
   if (compound.details) {
@@ -532,6 +565,13 @@ export function buildRouteFromNavigationState(state: NavigationState): string {
       return `skills/skill/${state.details.skillSlug}`
     }
     return 'skills'
+  }
+
+  if (state.navigator === 'chat') {
+    if (state.details) {
+      return `chat/session/${state.details.sessionId}`
+    }
+    return 'chat'
   }
 
   // Chats

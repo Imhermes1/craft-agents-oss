@@ -68,7 +68,7 @@ export type { Route }
 
 // Re-export navigation state types for consumers
 export type { NavigationState, ChatFilter }
-export { isChatsNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation }
+export { isChatsNavigation, isChatNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation }
 
 interface NavigationContextValue {
   /** Navigate to a route */

@@ -50,6 +50,11 @@ export interface SessionTokenUsage {
 export type { StoredMessage } from '@craft-agent/core/types';
 
 /**
+ * Session runtime type - determines which agent runtime to use
+ */
+export type SessionRuntime = 'claude' | 'openrouter-chat';
+
+/**
  * Session configuration (persisted metadata)
  */
 export interface SessionConfig {
@@ -84,6 +89,8 @@ export interface SessionConfig {
   model?: string;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Runtime to use for this session ('claude' or 'openrouter-chat'). Defaults to 'claude' for backwards compatibility. */
+  runtime?: SessionRuntime;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -143,6 +150,8 @@ export interface SessionHeader {
   model?: string;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Runtime to use for this session ('claude' or 'openrouter-chat'). Defaults to 'claude' for backwards compatibility. */
+  runtime?: SessionRuntime;
   /**
    * Pending plan execution state - tracks "Accept & Compact" flow.
    * When set, indicates a plan needs to be executed after compaction completes.
@@ -200,4 +209,6 @@ export interface SessionMetadata {
   model?: string;
   /** Thinking level for this session ('off', 'think', 'max') */
   thinkingLevel?: ThinkingLevel;
+  /** Runtime to use for this session ('claude' or 'openrouter-chat'). Defaults to 'claude' for backwards compatibility. */
+  runtime?: SessionRuntime;
 }

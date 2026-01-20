@@ -20,6 +20,7 @@
 /** Types of credentials we store */
 export type CredentialType =
   | 'anthropic_api_key'
+  | 'openrouter_api_key'  // OpenRouter API key
   | 'claude_oauth'
   | 'craft_oauth'
   | 'workspace_oauth'
@@ -35,6 +36,7 @@ export type CredentialType =
 /** Valid credential types for validation */
 const VALID_CREDENTIAL_TYPES: readonly CredentialType[] = [
   'anthropic_api_key',
+  'openrouter_api_key',
   'claude_oauth',
   'craft_oauth',
   'workspace_oauth',

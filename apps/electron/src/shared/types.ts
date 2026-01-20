@@ -321,6 +321,8 @@ export interface CreateSessionOptions {
    * - Absolute path string: Use this specific path
    */
   workingDirectory?: string | 'user_default' | 'none'
+  /** Runtime to use for this session ('claude' or 'openrouter-chat'). Defaults to 'claude'. */
+  runtime?: 'claude' | 'openrouter-chat'
 }
 
 // Events sent from main to renderer
@@ -974,6 +976,17 @@ export interface SkillsNavigationState {
 }
 
 /**
+ * Chat navigation state - shows ChatModePanel in navigator (OpenRouter chat mode)
+ */
+export interface ChatNavigationState {
+  navigator: 'chat'
+  /** Selected chat details, or null for empty state */
+  details: { type: 'chat'; sessionId: string } | null
+  /** Optional right sidebar panel state */
+  rightSidebar?: RightSidebarPanel
+}
+
+/**
  * Unified navigation state - single source of truth for all 3 panels
  *
  * From this state we can derive:
@@ -983,6 +996,7 @@ export interface SkillsNavigationState {
  */
 export type NavigationState =
   | ChatsNavigationState
+  | ChatNavigationState
   | SourcesNavigationState
   | SettingsNavigationState
   | SkillsNavigationState
@@ -1016,6 +1030,13 @@ export const isSkillsNavigation = (
 ): state is SkillsNavigationState => state.navigator === 'skills'
 
 /**
+ * Type guard to check if state is chat navigation (OpenRouter chat mode)
+ */
+export const isChatNavigation = (
+  state: NavigationState
+): state is ChatNavigationState => state.navigator === 'chat'
+
+/**
  * Default navigation state - allChats with no selection
  */
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
@@ -1039,6 +1060,12 @@ export const getNavigationStateKey = (state: NavigationState): string => {
       return `skills/skill/${state.details.skillSlug}`
     }
     return 'skills'
+  }
+  if (state.navigator === 'chat') {
+    if (state.details) {
+      return `chat/session/${state.details.sessionId}`
+    }
+    return 'chat'
   }
   if (state.navigator === 'settings') {
     return `settings:${state.subpage}`
@@ -1077,6 +1104,16 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
       return { navigator: 'skills', details: { type: 'skill', skillSlug } }
     }
     return { navigator: 'skills', details: null }
+  }
+
+  // Handle chat (OpenRouter chat mode)
+  if (key === 'chat') return { navigator: 'chat', details: null }
+  if (key.startsWith('chat/session/')) {
+    const sessionId = key.slice(13)
+    if (sessionId) {
+      return { navigator: 'chat', details: { type: 'chat', sessionId } }
+    }
+    return { navigator: 'chat', details: null }
   }
 
   // Handle settings

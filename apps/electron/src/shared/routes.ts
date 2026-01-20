@@ -116,6 +116,12 @@ export const routes = {
         ? `skills/skill/${skillSlug}` as const
         : 'skills' as const,
 
+    /** Chat view (OpenRouter chat mode navigator) */
+    chat: (sessionId?: string) =>
+      sessionId
+        ? `chat/session/${sessionId}` as const
+        : 'chat' as const,
+
     /** Settings view (settings navigator) */
     settings: (subpage?: 'app' | 'workspace' | 'permissions' | 'shortcuts' | 'preferences') =>
       subpage && subpage !== 'app'

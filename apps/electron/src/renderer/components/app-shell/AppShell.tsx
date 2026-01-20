@@ -18,6 +18,7 @@ import {
   DatabaseZap,
   Zap,
   Inbox,
+  MessageSquare,
 } from "lucide-react"
 import { PanelRightRounded } from "../icons/PanelRightRounded"
 import { PanelLeftRounded } from "../icons/PanelLeftRounded"
@@ -79,6 +80,7 @@ import {
   useNavigation,
   useNavigationState,
   isChatsNavigation,
+  isChatNavigation,
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
@@ -88,6 +90,7 @@ import {
 import type { SettingsSubpage } from "../../../shared/types"
 import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
+import { ChatModePanel } from "./ChatModePanel"
 import { PanelHeader } from "./PanelHeader"
 import { EditPopover, getEditConfig } from "@/components/ui/EditPopover"
 import SettingsNavigator from "@/pages/settings/SettingsNavigator"
@@ -777,6 +780,11 @@ function AppShellContent({
     navigate(routes.view.skills())
   }, [])
 
+  // Handler for chat mode view (OpenRouter)
+  const handleChatClick = useCallback(() => {
+    navigate(routes.view.chat())
+  }, [])
+
   // Handler for settings view
   const handleSettingsClick = useCallback((subpage: SettingsSubpage = 'app') => {
     navigate(routes.view.settings(subpage))
@@ -811,12 +819,17 @@ function AppShellContent({
   }, [])
 
   // Create a new chat and select it
-  const handleNewChat = useCallback(async (_useCurrentAgent: boolean = true) => {
+  const handleNewChat = useCallback(async (_useCurrentAgent: boolean = true, runtime?: 'claude' | 'openrouter-chat') => {
     if (!activeWorkspace) return
 
-    const newSession = await onCreateSession(activeWorkspace.id)
+    const newSession = await onCreateSession(activeWorkspace.id, runtime ? { runtime } : undefined)
     // Navigate to the new session via central routing
-    navigate(routes.view.allChats(newSession.id))
+    // If runtime is openrouter-chat, navigate to chat mode, otherwise allChats
+    if (runtime === 'openrouter-chat') {
+      navigate(routes.view.chat(newSession.id))
+    } else {
+      navigate(routes.view.allChats(newSession.id))
+    }
   }, [activeWorkspace, onCreateSession])
 
   // Delete Source - simplified since agents system is removed
@@ -877,11 +890,14 @@ function AppShellContent({
     // 2.6. Skills nav item
     result.push({ id: 'nav:skills', type: 'nav', action: handleSkillsClick })
 
-    // 2.7. Settings nav item
+    // 2.7. Chat mode nav item (OpenRouter)
+    result.push({ id: 'nav:chat', type: 'nav', action: handleChatClick })
+
+    // 2.8. Settings nav item
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick('app') })
 
     return result
-  }, [handleAllChatsClick, handleFlaggedClick, handleTodoStateClick, todoStates, handleSourcesClick, handleSkillsClick, handleSettingsClick])
+  }, [handleAllChatsClick, handleFlaggedClick, handleTodoStateClick, todoStates, handleSourcesClick, handleSkillsClick, handleChatClick, handleSettingsClick])
 
   // Toggle folder expanded state
   const handleToggleFolder = React.useCallback((path: string) => {
@@ -1181,7 +1197,16 @@ function AppShellContent({
                         onAddSkill: openAddSkill,
                       },
                     },
-                    { id: "separator:skills-settings", type: "separator" },
+                    { id: "separator:skills-chat", type: "separator" },
+                    {
+                      id: "nav:chat",
+                      title: "Chat",
+                      icon: MessageSquare,
+                      variant: isChatNavigation(navState) ? "default" : "ghost",
+                      onClick: handleChatClick,
+                      // No context menu for Chat mode
+                    },
+                    { id: "separator:chat-settings", type: "separator" },
                     {
                       id: "nav:settings",
                       title: "Settings",
@@ -1397,6 +1422,15 @@ function AppShellContent({
               <SettingsNavigator
                 selectedSubpage={navState.subpage}
                 onSelectSubpage={(subpage) => handleSettingsClick(subpage)}
+              />
+            )}
+            {isChatNavigation(navState) && (
+              /* Chat Mode Panel (OpenRouter sessions) */
+              <ChatModePanel
+                sessions={workspaceSessionMetas}
+                selectedSessionId={isChatNavigation(navState) && navState.details ? navState.details.sessionId : null}
+                onSessionClick={(sessionId) => navigate(routes.view.chat(sessionId))}
+                onNewChat={() => handleNewChat(true, 'openrouter-chat')}
               />
             )}
             {isChatsNavigation(navState) && (
