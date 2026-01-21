@@ -944,6 +944,56 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     }
   })
 
+  // Test API connection (validates API key, base URL, and optionally custom model)
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_TEST_API_CONNECTION, async (_event, apiKey: string, baseUrl?: string, modelName?: string): Promise<{ success: boolean; error?: string; modelCount?: number }> => {
+    if (!apiKey?.trim()) {
+      return { success: false, error: 'API key is required' }
+    }
+
+    try {
+      const Anthropic = (await import('@anthropic-ai/sdk')).default
+      const client = new Anthropic({
+        apiKey: apiKey.trim(),
+        ...(baseUrl?.trim() ? { baseURL: baseUrl.trim() } : {})
+      })
+
+      // If a custom model name is provided, try to send a minimal message to validate it
+      if (modelName?.trim()) {
+        try {
+          await client.messages.create({
+            model: modelName.trim(),
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'test' }]
+          })
+          return { success: true }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error)
+          if (msg.includes('401') || msg.includes('invalid') || msg.includes('Unauthorized')) {
+            return { success: false, error: 'Invalid API key' }
+          }
+          if (msg.includes('model') || msg.includes('not found')) {
+            return { success: false, error: `Model "${modelName}" not found` }
+          }
+          return { success: false, error: msg }
+        }
+      }
+
+      // Default: list models to validate connection
+      const result = await client.models.list()
+      const modelCount = result.data?.length ?? 0
+      return { success: true, modelCount }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      if (msg.includes('401') || msg.includes('invalid') || msg.includes('Unauthorized')) {
+        return { success: false, error: 'Invalid API key' }
+      }
+      if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND')) {
+        return { success: false, error: 'Cannot connect to API server' }
+      }
+      return { success: false, error: msg }
+    }
+  })
+
   // ============================================================
   // Settings - Model
   // ============================================================

@@ -533,6 +533,7 @@ export const IPC_CHANNELS = {
   // Settings - Billing
   SETTINGS_GET_BILLING_METHOD: 'settings:getBillingMethod',
   SETTINGS_UPDATE_BILLING_METHOD: 'settings:updateBillingMethod',
+  SETTINGS_TEST_API_CONNECTION: 'settings:testApiConnection',
 
   // Settings - Model
   SETTINGS_GET_MODEL: 'settings:getModel',
@@ -733,6 +734,7 @@ export interface ElectronAPI {
   // Settings - Billing
   getBillingMethod(): Promise<BillingMethodInfo>
   updateBillingMethod(authType: AuthType, credential?: string, anthropicBaseUrl?: string | null, customModelNames?: { opus?: string; sonnet?: string; haiku?: string } | null): Promise<void>
+  testApiConnection(apiKey: string, baseUrl?: string, modelName?: string): Promise<{ success: boolean; error?: string; modelCount?: number }>
 
   // Settings - Model (global default)
   getModel(): Promise<string | null>

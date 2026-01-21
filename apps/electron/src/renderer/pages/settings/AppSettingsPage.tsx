@@ -374,6 +374,9 @@ export default function AppSettingsPage() {
   })
   const [isSavingApiKey, setIsSavingApiKey] = useState(false)
   const [apiKeyError, setApiKeyError] = useState<string | undefined>()
+  // Test connection state
+  const [isTestingConnection, setIsTestingConnection] = useState(false)
+  const [testConnectionResult, setTestConnectionResult] = useState<{ success: boolean; error?: string; modelCount?: number } | null>(null)
   // Keep a copy of the last successfully saved API key for restoring after auth type switches
   const savedApiKeyRef = React.useRef<string | null>(null)
 
@@ -725,7 +728,7 @@ export default function AppSettingsPage() {
                   />
 
                   <SettingsInput
-                    label="Base URL"
+                    label="Anthropic Base URL"
                     description="For third-party Claude-compatible APIs (optional)"
                     value={baseUrlValue}
                     onChange={setBaseUrlValue}
@@ -763,17 +766,60 @@ export default function AppSettingsPage() {
                     </div>
                   </div>
 
-                  <div
-                    className={cn(
-                      'px-4 py-2 text-xs text-muted-foreground flex items-center gap-1 transition-all duration-300',
-                      isSavingApiKey
-                        ? 'opacity-100 max-h-10'
-                        : 'opacity-0 max-h-0 py-0 overflow-hidden'
-                    )}
-                  >
-                    <Spinner className="size-3" />
-                    Saving...
+                  {/* Test Connection Button */}
+                  <div className="px-4 py-3 border-t border-border/50">
+                    <div className="flex items-center gap-3">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          setIsTestingConnection(true)
+                          setTestConnectionResult(null)
+                          try {
+                            // Use the first available custom model name for testing
+                            const testModel = customModelNames.sonnet || customModelNames.opus || customModelNames.haiku || undefined
+                            const result = await window.electronAPI.testApiConnection(
+                              apiKeyValue,
+                              baseUrlValue || undefined,
+                              testModel
+                            )
+                            setTestConnectionResult(result)
+                          } catch (error) {
+                            setTestConnectionResult({
+                              success: false,
+                              error: error instanceof Error ? error.message : 'Connection failed'
+                            })
+                          } finally {
+                            setIsTestingConnection(false)
+                          }
+                        }}
+                        disabled={!apiKeyValue.trim() || isTestingConnection}
+                      >
+                        {isTestingConnection ? (
+                          <>
+                            <Spinner className="size-3 mr-1.5" />
+                            Testing...
+                          </>
+                        ) : (
+                          'Test Connection'
+                        )}
+                      </Button>
+                      {testConnectionResult && (
+                        <span className={cn(
+                          'text-sm',
+                          testConnectionResult.success ? 'text-success' : 'text-destructive'
+                        )}>
+                          {testConnectionResult.success
+                            ? testConnectionResult.modelCount
+                              ? `✓ Connected (${testConnectionResult.modelCount} models)`
+                              : '✓ Connected'
+                            : `✗ ${testConnectionResult.error}`}
+                        </span>
+                      )}
+                    </div>
                   </div>
+
+
                 </SettingsCard>
               )}
 

@@ -133,7 +133,7 @@ export function useOnboarding({
         errorMessage: error instanceof Error ? error.message : 'Failed to save configuration',
       }))
     }
-  }, [state.billingMethod])
+  }, [state.billingMethod, baseUrl, customModelNames])
 
   // Continue to next step
   const handleContinue = useCallback(async () => {

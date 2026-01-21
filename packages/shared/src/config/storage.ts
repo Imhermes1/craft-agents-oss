@@ -223,12 +223,19 @@ export function setAuthType(authType: AuthType): void {
 }
 
 /**
- * Validate if a string is a valid HTTPS URL (HTTP is rejected for security)
+ * Validate if a string is a valid URL.
+ * HTTPS required for remote servers; HTTP allowed only for localhost/127.0.0.1
  */
 function isValidUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'https:';
+    if (parsed.protocol === 'https:') return true;
+    // Allow HTTP only for local development (localhost or 127.0.0.1)
+    if (parsed.protocol === 'http:') {
+      const host = parsed.hostname.toLowerCase();
+      return host === 'localhost' || host === '127.0.0.1';
+    }
+    return false;
   } catch {
     return false;
   }

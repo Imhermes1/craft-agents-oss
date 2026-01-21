@@ -98,6 +98,9 @@ export function CredentialsStep({
 }: CredentialsStepProps) {
   const [value, setValue] = useState('')
   const [showValue, setShowValue] = useState(false)
+  // Test connection state
+  const [isTestingConnection, setIsTestingConnection] = useState(false)
+  const [testConnectionResult, setTestConnectionResult] = useState<{ success: boolean; error?: string; modelCount?: number } | null>(null)
   const [authCode, setAuthCode] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
@@ -324,7 +327,7 @@ export function CredentialsStep({
             {/* Base URL */}
             <div className="space-y-2">
               <Label htmlFor="base-url" className="text-xs text-muted-foreground">
-                Anthropic BASE URL <span className="font-normal">(optional)</span>
+                Anthropic Base URL <span className="font-normal">(optional)</span>
               </Label>
               <Input
                 id="base-url"
@@ -397,6 +400,60 @@ export function CredentialsStep({
                   disabled={status === 'validating'}
                   className="font-mono text-sm"
                 />
+              </div>
+            </div>
+
+            {/* Test Connection Button */}
+            <div className="pt-2 border-t border-border">
+              <div className="flex items-center gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    setIsTestingConnection(true)
+                    setTestConnectionResult(null)
+                    try {
+                      // Use the first available custom model name for testing
+                      const testModel = customModelNames.sonnet || customModelNames.opus || customModelNames.haiku || undefined
+                      const result = await window.electronAPI.testApiConnection(
+                        value,
+                        baseUrl || undefined,
+                        testModel
+                      )
+                      setTestConnectionResult(result)
+                    } catch (error) {
+                      setTestConnectionResult({
+                        success: false,
+                        error: error instanceof Error ? error.message : 'Connection failed'
+                      })
+                    } finally {
+                      setIsTestingConnection(false)
+                    }
+                  }}
+                  disabled={!value.trim() || isTestingConnection}
+                >
+                  {isTestingConnection ? (
+                    <>
+                      <Spinner className="size-3 mr-1.5" />
+                      Testing...
+                    </>
+                  ) : (
+                    'Test Connection'
+                  )}
+                </Button>
+                {testConnectionResult && (
+                  <span className={cn(
+                    'text-sm',
+                    testConnectionResult.success ? 'text-success' : 'text-destructive'
+                  )}>
+                    {testConnectionResult.success
+                      ? testConnectionResult.modelCount
+                        ? `✓ Connected (${testConnectionResult.modelCount} models)`
+                        : '✓ Connected'
+                      : `✗ ${testConnectionResult.error}`}
+                  </span>
+                )}
               </div>
             </div>
           </CollapsibleContent>
