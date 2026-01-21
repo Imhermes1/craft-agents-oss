@@ -851,8 +851,13 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
 
     let hasCredential = false
     let apiKey: string | undefined
+    let anthropicBaseUrl: string | undefined
+    let customModelNames: { opus?: string; sonnet?: string; haiku?: string } | undefined
+
     if (authType === 'api_key') {
       apiKey = await manager.getApiKey() ?? undefined
+      anthropicBaseUrl = getAnthropicBaseUrl() ?? undefined
+      customModelNames = getCustomModelNames() ?? undefined
       hasCredential = !!apiKey
     } else if (authType === 'oauth_token') {
       hasCredential = !!(await manager.getClaudeOAuth())
@@ -862,8 +867,8 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       authType,
       hasCredential,
       apiKey,
-      anthropicBaseUrl: getAnthropicBaseUrl() ?? undefined,
-      customModelNames: getCustomModelNames() ?? undefined
+      anthropicBaseUrl,
+      customModelNames,
     }
   })
 
@@ -909,7 +914,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       }
     }
 
-    // Store new credential if provided
+    // Store or clear credential
     if (credential) {
       if (authType === 'api_key') {
         await manager.setApiKey(credential)
@@ -929,6 +934,15 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
           await manager.setClaudeOAuth(credential)
           ipcLog.info('Saved Claude OAuth access token only')
         }
+      }
+    } else if (credential === '') {
+      // Empty string means user explicitly cleared the credential
+      if (authType === 'api_key') {
+        await manager.delete({ type: 'anthropic_api_key' })
+        ipcLog.info('API key cleared')
+      } else if (authType === 'oauth_token') {
+        await manager.delete({ type: 'claude_oauth' })
+        ipcLog.info('Claude OAuth cleared')
       }
     }
 

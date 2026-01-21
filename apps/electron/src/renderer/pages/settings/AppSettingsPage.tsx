@@ -228,6 +228,7 @@ function ClaudeOAuthDialogContent(props: ClaudeOAuthDialogProps) {
 // ============================================
 
 const MIN_SAVE_DISPLAY_MS = 1500
+const DEBOUNCE_MS = 500
 
 function useApiKeyAutoSave({
   apiKey,
@@ -248,7 +249,7 @@ function useApiKeyAutoSave({
   onSaveSuccess?: () => void
   onSaveError?: (error: string) => void
 }) {
-  const intervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null)
+  const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedRef = React.useRef<string | null>(null)
   const isInitialLoadRef = React.useRef(true)
   const saveStartTimeRef = React.useRef<number>(0)
@@ -265,12 +266,6 @@ function useApiKeyAutoSave({
 
     const trimmedKey = apiKey.trim()
 
-    // If user hasn't entered a new API key and credential already exists, skip saving to avoid overwriting
-    if (!trimmedKey && hasCredential) return
-
-    // Skip if no key and no existing credential
-    if (!trimmedKey && !hasCredential) return
-
     saveStartTimeRef.current = Date.now()
     onSaveStart?.()
     try {
@@ -284,7 +279,7 @@ function useApiKeyAutoSave({
 
       await window.electronAPI.updateBillingMethod(
         'api_key',
-        trimmedKey || undefined,
+        trimmedKey,  // Pass empty string to clear credential
         baseUrl.trim() || null,
         modelNames
       )
@@ -308,43 +303,46 @@ function useApiKeyAutoSave({
         onSaveError?.(errorMsg)
       }
     }
-  }, [authType, apiKey, baseUrl, customModelNames, hasCredential, serializeConfig, onSaveStart, onSaveSuccess, onSaveError])
+  }, [authType, apiKey, baseUrl, customModelNames, serializeConfig, onSaveStart, onSaveSuccess, onSaveError])
 
   const handleBlur = React.useCallback(() => {
     if (isInitialLoadRef.current) return
     doSave()
   }, [doSave])
 
+  // Debounce auto-save on input change
   React.useEffect(() => {
     if (authType !== 'api_key') return
+    if (isInitialLoadRef.current) return
 
-    intervalRef.current = setInterval(() => {
-      if (isInitialLoadRef.current) return
+    // Clear previous debounce timer
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current)
+    }
+
+    // Schedule save after debounce delay
+    debounceRef.current = setTimeout(() => {
       doSave()
-    }, 3000)
+    }, DEBOUNCE_MS)
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
+      if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [authType, doSave])
+  }, [authType, apiKey, baseUrl, customModelNames, doSave])
 
   // Initialize lastSavedRef when API key is first loaded from backend
   // This effect waits for hasCredential to be set (indicating data is loaded)
   // before setting the initial saved state and enabling auto-save
   React.useEffect(() => {
     if (authType === 'api_key' && isInitialLoadRef.current) {
-      // Only initialize when we have meaningful data to compare against
-      // If hasCredential is true but apiKey is empty, the backend load hasn't completed yet
-      // If hasCredential is false and apiKey is empty, there's genuinely no credential
-      const shouldInitialize = (hasCredential && apiKey) || (!hasCredential && !apiKey)
-      if (shouldInitialize) {
-        lastSavedRef.current = serializeConfig()
-        setTimeout(() => {
-          isInitialLoadRef.current = false
-        }, 100)
-      }
+      // Initialize after a short delay to ensure backend data has loaded
+      // hasCredential indicates whether backend has a stored credential
+      lastSavedRef.current = serializeConfig()
+      setTimeout(() => {
+        isInitialLoadRef.current = false
+      }, 100)
     }
-  }, [authType, hasCredential, apiKey, serializeConfig])
+  }, [authType, hasCredential, serializeConfig])
 
   return { handleBlur }
 }
@@ -372,13 +370,10 @@ export default function AppSettingsPage() {
     sonnet: '',
     haiku: ''
   })
-  const [isSavingApiKey, setIsSavingApiKey] = useState(false)
   const [apiKeyError, setApiKeyError] = useState<string | undefined>()
   // Test connection state
   const [isTestingConnection, setIsTestingConnection] = useState(false)
   const [testConnectionResult, setTestConnectionResult] = useState<{ success: boolean; error?: string; modelCount?: number } | null>(null)
-  // Keep a copy of the last successfully saved API key for restoring after auth type switches
-  const savedApiKeyRef = React.useRef<string | null>(null)
 
   // Claude OAuth state
   const [existingClaudeToken, setExistingClaudeToken] = useState<string | null>(null)
@@ -410,17 +405,11 @@ export default function AppSettingsPage() {
     customModelNames,
     authType,
     hasCredential,
-    onSaveStart: () => setIsSavingApiKey(true),
     onSaveSuccess: () => {
-      setIsSavingApiKey(false)
-      // Remember the successfully saved API key for restoration after auth type switches
-      if (apiKeyValue.trim()) {
-        savedApiKeyRef.current = apiKeyValue.trim()
-      }
+      // Could show a success indicator here if needed
     },
     onSaveError: (error) => {
       setApiKeyError(error)
-      setIsSavingApiKey(false)
     },
   })
 
@@ -492,29 +481,24 @@ export default function AppSettingsPage() {
     if (method === 'api_key') {
       if (authType !== 'api_key') {
         try {
-          // Get current billing info to preserve base URL and model names
-          const billing = await window.electronAPI.getBillingMethod()
-          const existingBaseUrl = billing.anthropicBaseUrl || ''
-          const existingModelNames = billing.customModelNames
-
-          // Use the previously saved API key if available, otherwise try current input value
-          const apiKeyToSave = savedApiKeyRef.current || apiKeyValue.trim() || undefined
+          // Switch to api_key mode using current frontend state (don't reload from backend)
+          const trimmedKey = apiKeyValue.trim() || undefined
+          const modelNames = (customModelNames.opus || customModelNames.sonnet || customModelNames.haiku)
+            ? {
+                opus: customModelNames.opus.trim() || undefined,
+                sonnet: customModelNames.sonnet.trim() || undefined,
+                haiku: customModelNames.haiku.trim() || undefined,
+              }
+            : null
 
           await window.electronAPI.updateBillingMethod(
             'api_key',
-            apiKeyToSave,
-            existingBaseUrl,
-            existingModelNames
+            trimmedKey,
+            baseUrlValue.trim() || null,
+            modelNames
           )
           setAuthType('api_key')
-          setHasCredential(!!apiKeyToSave || billing.hasCredential)
-          setBaseUrlValue(existingBaseUrl)
-          setApiKeyValue(apiKeyToSave || '')
-          setCustomModelNames({
-            opus: existingModelNames?.opus || '',
-            sonnet: existingModelNames?.sonnet || '',
-            haiku: existingModelNames?.haiku || '',
-          })
+          setHasCredential(!!trimmedKey)
         } catch (error) {
           console.error('Failed to switch to API key mode:', error)
         }
@@ -776,7 +760,6 @@ export default function AppSettingsPage() {
                           setIsTestingConnection(true)
                           setTestConnectionResult(null)
                           try {
-                            // Use the first available custom model name for testing
                             const testModel = customModelNames.sonnet || customModelNames.opus || customModelNames.haiku || undefined
                             const result = await window.electronAPI.testApiConnection(
                               apiKeyValue,
@@ -793,7 +776,7 @@ export default function AppSettingsPage() {
                             setIsTestingConnection(false)
                           }
                         }}
-                        disabled={!apiKeyValue.trim() || isTestingConnection}
+                        disabled={!apiKeyValue?.trim() || isTestingConnection}
                       >
                         {isTestingConnection ? (
                           <>

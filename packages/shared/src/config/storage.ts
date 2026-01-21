@@ -222,44 +222,23 @@ export function setAuthType(authType: AuthType): void {
   saveConfig(config);
 }
 
-/**
- * Validate if a string is a valid URL.
- * HTTPS required for remote servers; HTTP allowed only for localhost/127.0.0.1
- */
-function isValidUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol === 'https:') return true;
-    // Allow HTTP only for local development (localhost or 127.0.0.1)
-    if (parsed.protocol === 'http:') {
-      const host = parsed.hostname.toLowerCase();
-      return host === 'localhost' || host === '127.0.0.1';
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-export function getAnthropicBaseUrl(): string | null {
-  const config = loadStoredConfig();
-  return config?.anthropicBaseUrl ?? null;
-}
-
 export function setAnthropicBaseUrl(baseUrl: string | null): void {
   const config = loadStoredConfig();
   if (!config) return;
 
   if (baseUrl) {
     const trimmed = baseUrl.trim();
-    if (!isValidUrl(trimmed)) {
-      throw new Error(`Invalid base URL: ${baseUrl}`);
-    }
+    // URL validation deferred to Test Connection button
     config.anthropicBaseUrl = trimmed;
   } else {
     delete config.anthropicBaseUrl;
   }
   saveConfig(config);
+}
+
+export function getAnthropicBaseUrl(): string | null {
+  const config = loadStoredConfig();
+  return config?.anthropicBaseUrl ?? null;
 }
 
 export function getModel(): string | null {
