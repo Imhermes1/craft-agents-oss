@@ -87,12 +87,27 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     }
   }, [sessionId, session])
 
-  // Mark session as read when displayed (not processing)
+  // Track window focus state for marking session as read when app regains focus
+  const [isWindowFocused, setIsWindowFocused] = React.useState(true)
   React.useEffect(() => {
-    if (session && !session.isProcessing) {
+    window.electronAPI.getWindowFocusState().then(setIsWindowFocused)
+    const cleanup = window.electronAPI.onWindowFocusChange(setIsWindowFocused)
+    return cleanup
+  }, [])
+
+  // Mark session as read when displayed, not processing, and window is focused
+  // This ensures badge clears when:
+  // 1. User switches to this session (sessionId changes)
+  // 2. Processing completes (isProcessing changes from true to false)
+  // 3. User returns to the app (isWindowFocused changes from false to true)
+  // Note: We intentionally use session?.id and session?.isProcessing instead of
+  // the full session object to avoid running on every message update.
+  React.useEffect(() => {
+    if (session && !session.isProcessing && isWindowFocused) {
       onMarkSessionRead(session.id)
     }
-  }, [session?.id, session?.isProcessing, onMarkSessionRead])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id, session?.isProcessing, isWindowFocused, onMarkSessionRead])
 
   // Get pending permission and credential for this session
   const pendingPermission = usePendingPermission(sessionId)
