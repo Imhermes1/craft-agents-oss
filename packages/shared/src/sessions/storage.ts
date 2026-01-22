@@ -142,6 +142,7 @@ export function createSession(
     workingDirectory?: string;
     permissionMode?: SessionConfig['permissionMode'];
     enabledSourceSlugs?: string[];
+    runtime?: SessionConfig['runtime'];
     model?: string;
   }
 ): SessionConfig {
@@ -168,6 +169,7 @@ export function createSession(
     sdkCwd,
     permissionMode: options?.permissionMode,
     enabledSourceSlugs: options?.enabledSourceSlugs,
+    runtime: options?.runtime,
     model: options?.model,
   };
 
@@ -355,6 +357,7 @@ function headerToMetadata(header: SessionHeader, workspaceRootPath: string): Ses
     return {
       id: header.id,
       workspaceRootPath,
+      runtime: header.runtime,
       name: header.name,
       createdAt: header.createdAt,
       lastUsedAt: header.lastUsedAt,

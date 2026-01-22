@@ -20,11 +20,12 @@ import { StoplightProvider } from '@/context/StoplightContext'
 import {
   useNavigationState,
   isChatsNavigation,
+  isChatNavigation,
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
 } from '@/contexts/NavigationContext'
-import { AppSettingsPage, WorkspaceSettingsPage, PermissionsSettingsPage, PreferencesPage, ShortcutsPage, SourceInfoPage, ChatPage } from '@/pages'
+import { AppSettingsPage, WorkspaceSettingsPage, PermissionsSettingsPage, PreferencesPage, ShortcutsPage, SourceInfoPage, ChatPage, ChatModePage } from '@/pages'
 import SkillInfoPage from '@/pages/SkillInfoPage'
 
 export interface MainContentPanelProps {
@@ -124,6 +125,25 @@ export function MainContentPanel({
       <Panel variant="grow" className={className}>
         <div className="flex items-center justify-center h-full text-muted-foreground">
           <p className="text-sm">No skills configured</p>
+        </div>
+      </Panel>
+    )
+  }
+
+  // Chat navigator (OpenRouter chat mode) - show ChatModePage
+  if (isChatNavigation(navState)) {
+    if (navState.details) {
+      return wrapWithStoplight(
+        <Panel variant="grow" className={className}>
+          <ChatModePage sessionId={navState.details.sessionId} />
+        </Panel>
+      )
+    }
+    // No session selected - empty state
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <div className="flex items-center justify-center h-full text-muted-foreground">
+          <p className="text-sm">No conversations yet</p>
         </div>
       </Panel>
     )

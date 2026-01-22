@@ -39,8 +39,11 @@ export const routes = {
      * @param input - Optional initial message to pre-fill or send
      * @param name - Optional session name
      * @param send - If true and input is provided, immediately sends the message
+     * @param runtime - Optional session runtime ('claude' | 'openrouter-chat')
+     * @param model - Optional model ID (for openrouter-chat runtime)
+     * @param sources - Optional comma-separated source slugs to enable for this session
      */
-    newChat: (params?: { input?: string; name?: string; send?: boolean }) =>
+    newChat: (params?: { input?: string; name?: string; send?: boolean; runtime?: string; model?: string; sources?: string }) =>
       `action/new-chat${toQueryString(params ? { ...params, send: params.send ? 'true' : undefined } : undefined)}` as const,
 
     /** Rename a session */
@@ -135,6 +138,12 @@ export const routes = {
       skillSlug
         ? `skills/skill/${skillSlug}` as const
         : 'skills' as const,
+
+    /** Chat view (OpenRouter chat mode) */
+    chat: (sessionId?: string) =>
+      sessionId
+        ? `chat/session/${sessionId}` as const
+        : 'chat' as const,
 
     /** Settings view (settings navigator) */
     settings: (subpage?: 'app' | 'workspace' | 'permissions' | 'shortcuts' | 'preferences') =>

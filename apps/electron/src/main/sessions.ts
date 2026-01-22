@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { rm, readFile } from 'fs/promises'
-import { CraftAgent, type AgentEvent, setPermissionMode, type PermissionMode, unregisterSessionScopedToolCallbacks, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest } from '@craft-agent/shared/agent'
+import { CraftAgent, OpenRouterRuntime, type AgentEvent, setPermissionMode, type PermissionMode, unregisterSessionScopedToolCallbacks, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest } from '@craft-agent/shared/agent'
 import { sessionLog, isDebugMode, getLogFilePath } from './logger'
 import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import type { WindowManager } from './window-manager'
@@ -47,6 +47,21 @@ import { type Session, type Message, type SessionEvent, type FileAttachment, typ
 import { generateSessionTitle, regenerateSessionTitle, formatPathsToRelative, formatToolInputPaths, perf } from '@craft-agent/shared/utils'
 import { DEFAULT_MODEL } from '@craft-agent/shared/config'
 import { type ThinkingLevel, DEFAULT_THINKING_LEVEL } from '@craft-agent/shared/agent/thinking-levels'
+
+const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-4o-mini'
+const DEFAULT_OPENAI_MODEL = 'gpt-5.2'
+
+async function getDefaultChatModel(): Promise<string> {
+  const credManager = getCredentialManager()
+  const [openRouterKey, openAIOAuth] = await Promise.all([
+    credManager.getOpenRouterApiKey(),
+    credManager.getOpenAIOAuthCredentials(),
+  ])
+
+  // Preserve existing default (OpenRouter) when available; fall back to direct OpenAI if that's all we have.
+  if (!openRouterKey && openAIOAuth?.accessToken) return DEFAULT_OPENAI_MODEL
+  return DEFAULT_OPENROUTER_MODEL
+}
 
 /**
  * Sanitize message content for use as session title.
@@ -93,8 +108,22 @@ async function buildServersFromSources(sources: LoadedSource[]) {
     const provider = source.config.provider
     if (isApiOAuthProvider(provider)) {
       return async () => {
-        const token = await credManager.getToken(source)
-        if (!token) throw new Error(`No token for ${source.config.slug}`)
+        // Try to get current token
+        let token = await credManager.getToken(source)
+
+        // If token is expired/missing, try to refresh
+        if (!token) {
+          sessionLog.debug(`[Sessions] Token expired for ${source.config.slug}, attempting refresh...`)
+          token = await credManager.refresh(source)
+
+          if (token) {
+            sessionLog.debug(`[Sessions] Successfully refreshed token for ${source.config.slug}`)
+          } else {
+            sessionLog.debug(`[Sessions] Failed to refresh token for ${source.config.slug}`)
+            throw new Error(`Token expired and refresh failed for ${source.config.slug}. Please re-authenticate.`)
+          }
+        }
+
         return token
       }
     }
@@ -124,7 +153,8 @@ async function buildServersFromSources(sources: LoadedSource[]) {
 interface ManagedSession {
   id: string
   workspace: Workspace
-  agent: CraftAgent | null  // Lazy-loaded - null until first message
+  runtime: import('../shared/types').SessionRuntime
+  agent: CraftAgent | OpenRouterRuntime | null  // Lazy-loaded - null until first message
   messages: Message[]
   isProcessing: boolean
   lastMessageAt: number
@@ -591,6 +621,7 @@ export class SessionManager {
           const managed: ManagedSession = {
             id: meta.id,
             workspace,
+            runtime: meta.runtime ?? 'claude',
             agent: null,  // Lazy-load agent when needed
             messages: [],  // Lazy-load messages when needed
             isProcessing: false,
@@ -645,6 +676,7 @@ export class SessionManager {
       const storedSession: StoredSession = {
         id: managed.id,
         workspaceRootPath,
+        runtime: managed.runtime,
         name: managed.name,
         createdAt: managed.lastMessageAt,  // Approximate, will be overwritten if already exists
         lastUsedAt: Date.now(),
@@ -655,6 +687,7 @@ export class SessionManager {
         enabledSourceSlugs: managed.enabledSourceSlugs,
         workingDirectory: managed.workingDirectory,
         sdkCwd: managed.sdkCwd,
+        model: managed.model,
         thinkingLevel: managed.thinkingLevel,
         messages: persistableMessages.map(messageToStored),
         tokenUsage: managed.tokenUsage ?? {
@@ -829,7 +862,7 @@ export class SessionManager {
 
     if (authMessage) {
       authMessage.authStatus = result.success ? 'completed' :
-                               result.cancelled ? 'cancelled' : 'failed'
+        result.cancelled ? 'cancelled' : 'failed'
       authMessage.authError = result.error
       authMessage.authEmail = result.email
       authMessage.authWorkspace = result.workspace
@@ -975,6 +1008,7 @@ export class SessionManager {
         lastReadMessageId: m.lastReadMessageId,
         workingDirectory: m.workingDirectory,
         model: m.model,
+        runtime: m.runtime,
         enabledSourceSlugs: m.enabledSourceSlugs,
         sharedUrl: m.sharedUrl,
         sharedId: m.sharedId,
@@ -1011,6 +1045,7 @@ export class SessionManager {
       lastReadMessageId: m.lastReadMessageId,
       workingDirectory: m.workingDirectory,
       model: m.model,
+      runtime: m.runtime,
       sessionFolderPath: getSessionStoragePath(m.workspace.rootPath, m.id),
       enabledSourceSlugs: m.enabledSourceSlugs,
       sharedUrl: m.sharedUrl,
@@ -1108,14 +1143,24 @@ export class SessionManager {
     }
 
     // Use storage layer to create and persist the session
+    const runtime = options?.runtime ?? 'claude'
+    const model = runtime === 'openrouter-chat'
+      ? (options?.model ?? await getDefaultChatModel())
+      : options?.model
+
     const storedSession = createStoredSession(workspaceRootPath, {
       permissionMode: defaultPermissionMode,
       workingDirectory: resolvedWorkingDir,
+      runtime,
+      model,
     })
+
+    sessionLog.info(`[SessionManager] Created session ${storedSession.id} with runtime: ${runtime}, model: ${model}`)
 
     const managed: ManagedSession = {
       id: storedSession.id,
       workspace,
+      runtime,
       agent: null,  // Lazy-load agent on first message
       messages: [],
       isProcessing: false,
@@ -1150,6 +1195,7 @@ export class SessionManager {
       todoState: undefined,  // User-controlled, defaults to undefined (treated as 'todo')
       workingDirectory: resolvedWorkingDir,
       model: managed.model,
+      runtime: managed.runtime,
       thinkingLevel: defaultThinkingLevel,
       sessionFolderPath: getSessionStoragePath(workspaceRootPath, storedSession.id),
     }
@@ -1158,10 +1204,54 @@ export class SessionManager {
   /**
    * Get or create agent for a session (lazy loading)
    */
-  private async getOrCreateAgent(managed: ManagedSession): Promise<CraftAgent> {
+  private async getOrCreateAgent(managed: ManagedSession): Promise<CraftAgent | OpenRouterRuntime> {
     if (!managed.agent) {
       const end = perf.start('agent.create', { sessionId: managed.id })
       const config = loadStoredConfig()
+
+      // ============================================================
+      // OpenRouter runtime (Chat mode)
+      // ============================================================
+      if (managed.runtime === 'openrouter-chat') {
+        const chatModel = managed.model ?? await getDefaultChatModel()
+        managed.agent = new OpenRouterRuntime({
+          workspace: managed.workspace,
+          session: {
+            id: managed.id,
+            workspaceRootPath: managed.workspace.rootPath,
+            createdAt: managed.lastMessageAt,
+            lastUsedAt: managed.lastMessageAt,
+            workingDirectory: managed.workingDirectory,
+            sdkCwd: managed.sdkCwd,
+            model: chatModel,
+          },
+          model: chatModel,
+          thinkingLevel: managed.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
+        })
+
+        // Apply sources/tools (if selected) and provide full source list for context.
+        const workspaceRootPath = managed.workspace.rootPath
+        const allSources = loadAllSources(workspaceRootPath)
+        managed.agent.setAllSources(allSources)
+
+        const enabledSlugs = managed.enabledSourceSlugs ?? []
+        if (enabledSlugs.length > 0) {
+          const sources = getSourcesBySlugs(workspaceRootPath, enabledSlugs)
+          const { mcpServers, apiServers, errors } = await buildServersFromSources(sources)
+          if (errors.length > 0) sessionLog.warn(`Source build errors (chat runtime):`, errors)
+          const intendedSlugs = sources.filter(s => s.config.enabled && s.config.isAuthenticated).map(s => s.config.slug)
+          managed.agent.setSourceServers(mcpServers, apiServers, intendedSlugs)
+        }
+
+        // Keep permission mode state consistent for shared UI, even though Chat runtime may not request permissions.
+        if (managed.permissionMode) {
+          setPermissionMode(managed.id, managed.permissionMode)
+        }
+
+        end()
+        return managed.agent
+      }
+
       managed.agent = new CraftAgent({
         workspace: managed.workspace,
         // Session model takes priority, fallback to global config
@@ -1879,7 +1969,14 @@ export class SessionManager {
     this.sendEvent({ type: 'title_regenerating', sessionId, isRegenerating: true }, managed.workspace.id)
 
     try {
-      const title = await regenerateSessionTitle(userMessages, assistantResponse)
+      // Get title options (model and API key) for regeneration
+      const titleOptions: any = { model: managed.model }
+      if (managed.runtime === 'openrouter-chat') {
+        const credManager = getCredentialManager()
+        titleOptions.apiKey = await credManager.getOpenRouterApiKey()
+      }
+
+      const title = await regenerateSessionTitle(userMessages, assistantResponse, titleOptions)
       sessionLog.info(`refreshTitle: regenerateSessionTitle returned: ${title ? `"${title}"` : 'null'}`)
       if (title) {
         managed.name = title
@@ -2640,7 +2737,12 @@ To view this task's output:
   private async generateTitle(managed: ManagedSession, userMessage: string): Promise<void> {
     sessionLog.info(`Starting title generation for session ${managed.id}`)
     try {
-      const title = await generateSessionTitle(userMessage)
+      const titleOptions: any = { model: managed.model }
+      if (managed.runtime === 'openrouter-chat') {
+        const credManager = getCredentialManager()
+        titleOptions.apiKey = await credManager.getOpenRouterApiKey()
+      }
+      const title = await generateSessionTitle(userMessage, titleOptions)
       if (title) {
         managed.name = title
         this.persistSession(managed)
@@ -3150,8 +3252,8 @@ To view this task's output:
       // Check mainFrame - it becomes null when render frame is disposed
       // This prevents Electron's internal error logging before our try-catch
       if (!window.isDestroyed() &&
-          !window.webContents.isDestroyed() &&
-          window.webContents.mainFrame) {
+        !window.webContents.isDestroyed() &&
+        window.webContents.mainFrame) {
         try {
           window.webContents.send(IPC_CHANNELS.SESSION_EVENT, event)
         } catch {

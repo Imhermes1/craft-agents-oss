@@ -177,8 +177,20 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
 
   // Open a session in a new window
   ipcMain.handle(IPC_CHANNELS.OPEN_SESSION_IN_NEW_WINDOW, async (_event, workspaceId: string, sessionId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) return
+
+    const { loadSession } = await import('@craft-agent/shared/sessions')
+    const session = loadSession(workspace.rootPath, sessionId)
+
     // Build deep link for session navigation
-    const deepLink = `craftagents://allChats/chat/${sessionId}`
+    // Agent runtime: allChats/chat/${sessionId}
+    // Chat runtime: chat/chat/${sessionId}
+    const isChat = session?.runtime === 'openrouter-chat'
+    const deepLink = isChat
+      ? `craftagents://chat/chat/${sessionId}`
+      : `craftagents://allChats/chat/${sessionId}`
+
     windowManager.createWindow({
       workspaceId,
       focused: true,
@@ -433,7 +445,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       try {
         const thumbnail = await nativeImage.createThumbnailFromPath(safePath, { width: 200, height: 200 })
         if (!thumbnail.isEmpty()) {
-          ;(attachment as { thumbnailBase64?: string }).thumbnailBase64 = thumbnail.toPNG().toString('base64')
+          ; (attachment as { thumbnailBase64?: string }).thumbnailBase64 = thumbnail.toPNG().toString('base64')
         }
       } catch (thumbError) {
         // Thumbnail generation failed - this is ok, we'll show an icon fallback
@@ -464,7 +476,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       const thumbnail = await nativeImage.createThumbnailFromPath(tempPath, { width: 200, height: 200 })
 
       // Clean up temp file
-      await unlink(tempPath).catch(() => {})
+      await unlink(tempPath).catch(() => { })
 
       if (!thumbnail.isEmpty()) {
         return thumbnail.toPNG().toString('base64')
@@ -472,7 +484,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       return null
     } catch (error) {
       // Clean up temp file on error
-      await unlink(tempPath).catch(() => {})
+      await unlink(tempPath).catch(() => { })
       ipcLog.info('generateThumbnail failed:', error instanceof Error ? error.message : error)
       return null
     }
@@ -649,7 +661,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       // Clean up any files we've written before the error
       if (filesToCleanup.length > 0) {
         ipcLog.info(`Cleaning up ${filesToCleanup.length} orphaned file(s) after storage error`)
-        await Promise.all(filesToCleanup.map(f => unlink(f).catch(() => {})))
+        await Promise.all(filesToCleanup.map(f => unlink(f).catch(() => { })))
       }
 
       const message = error instanceof Error ? error.message : 'Unknown error'
@@ -1001,7 +1013,7 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     } else {
       // Update the setting in defaults
       config.defaults = config.defaults || {}
-      ;(config.defaults as Record<string, unknown>)[key] = value
+        ; (config.defaults as Record<string, unknown>)[key] = value
     }
 
     // Save the config
@@ -1595,6 +1607,147 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   })
 
   // ============================================================
+  // Call an MCP tool from a source
+  ipcMain.handle(IPC_CHANNELS.SOURCES_CALL_MCP_TOOL, async (_event, workspaceId: string, sourceSlug: string, toolName: string, args: Record<string, unknown>) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) return { success: false, error: 'Workspace not found' }
+
+    try {
+      const sources = await loadWorkspaceSources(workspace.rootPath)
+      const source = sources.find(s => s.config.slug === sourceSlug)
+      if (!source) return { success: false, error: 'Source not found' }
+      if (source.config.type !== 'mcp') return { success: false, error: 'Source is not an MCP server' }
+      if (!source.config.mcp) return { success: false, error: 'MCP config not found' }
+
+      const { CraftMcpClient } = await import('@craft-agent/shared/mcp')
+      let client: InstanceType<typeof CraftMcpClient>
+
+      if (source.config.mcp.transport === 'stdio') {
+        if (!source.config.mcp.command) return { success: false, error: 'Missing command' }
+        client = new CraftMcpClient({
+          transport: 'stdio',
+          command: source.config.mcp.command,
+          args: source.config.mcp.args,
+          env: source.config.mcp.env,
+        })
+      } else {
+        if (!source.config.mcp.url) return { success: false, error: 'Missing URL' }
+
+        let accessToken: string | undefined
+        if (source.config.mcp.authType === 'oauth' || source.config.mcp.authType === 'bearer') {
+          const credentialManager = getCredentialManager()
+          const credentialId = source.config.mcp.authType === 'oauth'
+            ? { type: 'source_oauth' as const, workspaceId: source.workspaceId, sourceId: sourceSlug }
+            : { type: 'source_bearer' as const, workspaceId: source.workspaceId, sourceId: sourceSlug }
+          const credential = await credentialManager.get(credentialId)
+          accessToken = credential?.value
+        }
+
+        client = new CraftMcpClient({
+          transport: 'http',
+          url: source.config.mcp.url,
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
+        })
+      }
+
+      const result = await client.callTool(toolName, args)
+      await client.close()
+      return { success: true, result }
+    } catch (error) {
+      ipcLog.error(`Failed to call MCP tool ${toolName}:`, error)
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to call tool' }
+    }
+  })
+
+  // ============================================================
+  // Apple Reminders (Native AppleScript)
+  // ============================================================
+
+  // Get reminders using AppleScript
+  ipcMain.handle(IPC_CHANNELS.APPLE_REMINDERS_GET, async () => {
+    try {
+      // AppleScript to get reminders from all lists (limited to 50 total for performance)
+      const script = `
+        tell application "Reminders"
+          set allReminders to {}
+          set listNames to name of every list
+          repeat with listName in listNames
+            try
+              set remindersList to reminders of list listName
+              set allReminders to allReminders & remindersList
+            end try
+          end repeat
+
+          set output to "["
+          set reminderCount to 0
+          repeat with aReminder in allReminders
+            if reminderCount ≥ 50 then exit repeat
+
+            set reminderName to name of aReminder
+            set isCompleted to completed of aReminder
+            set reminderID to id of aReminder
+            set dueDate to missing value
+            try
+              set dueDate to due date of aReminder
+            end try
+
+            if reminderCount > 0 then set output to output & ","
+            set output to output & "{"
+            set output to output & "\\"name\\":\\"" & reminderName & "\\""
+            set output to output & ",\\"completed\\":" & isCompleted
+            set output to output & ",\\"id\\":\\"" & reminderID & "\\""
+            if dueDate is not missing value then
+              set output to output & ",\\"dueDate\\":\\"" & (dueDate as string) & "\\""
+            end if
+            set output to output & "}"
+
+            set reminderCount to reminderCount + 1
+          end repeat
+          set output to output & "]"
+          return output
+        end tell
+      `
+
+      const result = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
+        encoding: 'utf8',
+        maxBuffer: 1024 * 1024 * 10, // 10MB buffer
+        timeout: 5000 // 5 second timeout
+      })
+
+      // Parse JSON output
+      const reminders = JSON.parse(result.trim())
+
+      ipcLog.info(`[AppleReminders] Fetched ${reminders.length} reminders`)
+      return { success: true, reminders }
+    } catch (error) {
+      ipcLog.error('[AppleReminders] Failed to fetch reminders:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch reminders' }
+    }
+  })
+
+  // Complete a reminder using AppleScript
+  ipcMain.handle(IPC_CHANNELS.APPLE_REMINDERS_COMPLETE, async (_event, reminderName: string) => {
+    try {
+      const script = `
+        tell application "Reminders"
+          set targetReminder to first reminder of list "Reminders" whose name is "${reminderName.replace(/"/g, '\\"')}"
+          set completed of targetReminder to true
+        end tell
+      `
+
+      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
+        encoding: 'utf8'
+      })
+
+      ipcLog.info(`[AppleReminders] Completed reminder: ${reminderName}`)
+      return { success: true }
+    } catch (error) {
+      ipcLog.error(`[AppleReminders] Failed to complete reminder ${reminderName}:`, error)
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to complete reminder' }
+    }
+  })
+
+  // ============================================================
   // Status Management (Workspace-scoped)
   // ============================================================
 
@@ -1776,9 +1929,9 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     // Broadcast to all windows except the sender
     for (const managed of windowManager.getAllWindows()) {
       if (!managed.window.isDestroyed() &&
-          !managed.window.webContents.isDestroyed() &&
-          managed.window.webContents.mainFrame &&
-          managed.window.webContents.id !== senderId) {
+        !managed.window.webContents.isDestroyed() &&
+        managed.window.webContents.mainFrame &&
+        managed.window.webContents.id !== senderId) {
         managed.window.webContents.send(IPC_CHANNELS.THEME_PREFERENCES_CHANGED, preferences)
       }
     }
@@ -1846,5 +1999,140 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
 
   // Note: Permission mode cycling settings (cyclablePermissionModes) are now workspace-level
   // and managed via WORKSPACE_SETTINGS_GET/UPDATE channels
+
+  // ============================================================
+  // OpenRouter API (Chat mode)
+  // ============================================================
+
+  // In-memory model cache (avoid hitting OpenRouter on every dropdown open)
+  let openRouterModelsCache: { fetchedAt: number; models: import('../shared/types').OpenRouterModel[] } | null = null
+  const OPENROUTER_MODELS_TTL_MS = 5 * 60 * 1000
+
+  // Get available models from OpenRouter API
+  ipcMain.handle(IPC_CHANNELS.OPENROUTER_GET_MODELS, async () => {
+    try {
+      const now = Date.now()
+      if (openRouterModelsCache && now - openRouterModelsCache.fetchedAt < OPENROUTER_MODELS_TTL_MS) {
+        return openRouterModelsCache.models
+      }
+
+      const credManager = getCredentialManager()
+      const apiKey = await credManager.getOpenRouterApiKey()
+
+      const maxAttempts = 3
+      let lastError: unknown
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const response = await fetch('https://openrouter.ai/api/v1/models', {
+            headers: apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {},
+          })
+
+          if (!response.ok) {
+            throw new Error(`Failed to fetch models: ${response.status}`)
+          }
+
+          const data = await response.json() as { data: import('../shared/types').OpenRouterModel[] }
+          const models = data.data || []
+          openRouterModelsCache = { fetchedAt: Date.now(), models }
+          return models
+        } catch (err) {
+          lastError = err
+          // backoff: 250ms, 500ms
+          if (attempt < maxAttempts) {
+            await new Promise(r => setTimeout(r, 250 * attempt))
+          }
+        }
+      }
+
+      if (openRouterModelsCache) {
+        ipcLog.warn('OpenRouter model fetch failed; using cached models:', lastError)
+        return openRouterModelsCache.models
+      }
+
+      throw lastError instanceof Error ? lastError : new Error('Failed to fetch models')
+    } catch (error) {
+      ipcLog.error('Failed to fetch OpenRouter models:', error)
+      return []
+    }
+  })
+
+  // Get OpenRouter API key
+  ipcMain.handle(IPC_CHANNELS.OPENROUTER_GET_API_KEY, async () => {
+    const credManager = getCredentialManager()
+    return credManager.getOpenRouterApiKey()
+  })
+
+  // Set OpenRouter API key
+  ipcMain.handle(IPC_CHANNELS.OPENROUTER_SET_API_KEY, async (_event, key: string) => {
+    const credManager = getCredentialManager()
+    await credManager.setOpenRouterApiKey(key)
+  })
+
+  // Delete OpenRouter API key
+  ipcMain.handle(IPC_CHANNELS.OPENROUTER_DELETE_API_KEY, async () => {
+    const credManager = getCredentialManager()
+    return credManager.deleteOpenRouterApiKey()
+  })
+
+  // ============================================================
+  // OpenAI OAuth (Chat mode - direct via Codex login)
+  // ============================================================
+
+  // Whether OpenAI OAuth token (Codex login) exists
+  ipcMain.handle(IPC_CHANNELS.OPENAI_GET_OAUTH_CONFIGURED, async () => {
+    const credManager = getCredentialManager()
+    const oauth = await credManager.getOpenAIOAuthCredentials()
+    return !!oauth?.accessToken
+  })
+
+  // Import Codex CLI login (~/.codex/auth.json)
+  ipcMain.handle(IPC_CHANNELS.OPENAI_IMPORT_CODEX_AUTH, async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const authPath = join(homedir(), '.codex', 'auth.json')
+      const raw = await readFile(authPath, 'utf8')
+      const json = JSON.parse(raw) as any
+
+      const accessToken = json?.tokens?.access_token
+      const refreshToken = json?.tokens?.refresh_token
+
+      if (typeof accessToken !== 'string' || accessToken.trim().length < 20) {
+        return { success: false, error: `No Codex access token found in ${authPath}. Run 'codex login' first.` }
+      }
+
+      // Best-effort expiry from JWT payload
+      let expiresAt: number | undefined
+      try {
+        const parts = String(accessToken).split('.')
+        if (parts.length >= 2) {
+          const payloadB64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+          const padded = payloadB64 + '='.repeat((4 - (payloadB64.length % 4)) % 4)
+          const payload = JSON.parse(Buffer.from(padded, 'base64').toString('utf8')) as any
+          if (typeof payload?.exp === 'number') {
+            expiresAt = payload.exp * 1000
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      const credManager = getCredentialManager()
+      await credManager.setOpenAIOAuthCredentials({
+        accessToken: accessToken.trim(),
+        refreshToken: typeof refreshToken === 'string' ? refreshToken.trim() : undefined,
+        expiresAt,
+      })
+
+      return { success: true }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return { success: false, error: message }
+    }
+  })
+
+  // Delete OpenAI OAuth token
+  ipcMain.handle(IPC_CHANNELS.OPENAI_DELETE_OAUTH, async () => {
+    const credManager = getCredentialManager()
+    return credManager.deleteOpenAIOAuthCredentials()
+  })
 
 }

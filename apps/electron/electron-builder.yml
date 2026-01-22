@@ -1,11 +1,11 @@
-appId: com.lukilabs.craft-agent
-productName: Craft Agents
+appId: com.craft-agent.custom
+productName: Craft Agent Custom
 copyright: Copyright © 2025 Craft Docs Ltd.
 
 electronVersion: "39.2.7"
 
 # Hook to compile macOS 26+ Liquid Glass icon after packaging
-afterPack: scripts/afterPack.cjs
+# afterPack: scripts/afterPack.cjs
 
 directories:
   output: release
@@ -29,17 +29,16 @@ files:
 extraMetadata:
   main: dist/main.cjs
 
-# Extra resources to bundle with the app (outside the app code)
-extraResources:
-  # macOS self-update script
-  - from: scripts/self-update.sh
-    to: self-update.sh
-  # Windows self-update script
-  - from: scripts/self-update.ps1
-    to: self-update.ps1
-  # Linux AppImage self-update script
-  - from: scripts/self-update-linux.sh
-    to: self-update-linux.sh
+# extraResources:
+#   # macOS self-update script
+#   - from: scripts/self-update.sh
+#     to: self-update.sh
+#   # Windows self-update script
+#   - from: scripts/self-update.ps1
+#     to: self-update.ps1
+#   # Linux AppImage self-update script
+#   - from: scripts/self-update-linux.sh
+#     to: self-update-linux.sh
 
 # Disable ASAR to avoid decompression overhead and click delays
 asar: false
@@ -55,11 +54,11 @@ mac:
     - target: dmg
       arch:
         - arm64
-        - x64
-  hardenedRuntime: true
+        # - x64
+  # hardenedRuntime: true
   gatekeeperAssess: false
-  entitlements: build/entitlements.mac.plist
-  entitlementsInherit: build/entitlements.mac.plist
+  # entitlements: build/entitlements.mac.plist
+  # entitlementsInherit: build/entitlements.mac.plist
   # Exclude ripgrep binaries for other platforms
   files:
     - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-linux"
@@ -72,7 +71,7 @@ mac:
 
 dmg:
   # Use predictable naming: Craft-Agent-arm64.dmg, Craft-Agent-x64.dmg
-  artifactName: "Craft-Agent-${arch}.dmg"
+  artifactName: "Craft-Agent-Custom-${arch}.dmg"
   contents:
     - x: 130
       y: 220

@@ -1,6 +1,7 @@
 /**
  * Shared summarization utility for large tool results.
- * Uses Claude Haiku for fast, cost-effective summarization.
+ * For Agent mode: Uses Claude Haiku for fast, cost-effective summarization.
+ * For Chat mode: Uses the current model from the session.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -63,7 +64,7 @@ export function estimateTokens(text: string): number {
 }
 
 /**
- * Context for summarization - helps Haiku extract relevant information
+ * Context for summarization - helps the model extract relevant information
  */
 export interface SummarizationContext {
   /** Tool or API name */
@@ -76,11 +77,16 @@ export interface SummarizationContext {
   modelIntent?: string;
   /** The user's original request (fallback context) */
   userRequest?: string;
+  /** Optional: Model to use for summarization (for Chat mode). If not provided, uses Claude Haiku. */
+  model?: string;
+  /** Optional: OpenRouter API key (for Chat mode with OpenRouter models) */
+  openRouterApiKey?: string;
 }
 
 /**
  * Summarize a large tool result to fit within context limits.
- * Uses Claude Haiku for fast, cheap summarization.
+ * Agent mode: Uses Claude Haiku for fast, cheap summarization.
+ * Chat mode: Uses the current model from context.model.
  *
  * @param response - The large response text to summarize
  * @param context - Context about the tool/API call for better summarization
@@ -90,11 +96,17 @@ export async function summarizeLargeResult(
   response: string,
   context: SummarizationContext
 ): Promise<string> {
+  // Chat mode: Use OpenRouter if model is provided
+  if (context.model && context.openRouterApiKey) {
+    return summarizeWithOpenRouter(response, context);
+  }
+
+  // Agent mode: Use Claude (default behavior)
   const client = await getAnthropicClient();
 
   // If no client (no API key), fall back to truncation
   if (!client) {
-    debug('[summarize] Falling back to truncation (no API key for Haiku summarization)');
+    debug('[summarize] Falling back to truncation (no API key for summarization)');
     return response.substring(0, 40000) + '\n\n[Result truncated due to size - smart summarization requires API key auth]';
   }
 
@@ -163,5 +175,98 @@ Provide a concise but comprehensive summary that captures the essential informat
     debug(`[summarize] Summarization failed: ${error}`);
     // Fall back to truncation if summarization fails
     return response.substring(0, 40000) + '\n\n[Result truncated due to size]';
+  }
+}
+
+/**
+ * Summarize using OpenRouter (for Chat mode)
+ */
+async function summarizeWithOpenRouter(
+  response: string,
+  context: SummarizationContext
+): Promise<string> {
+  const { model, openRouterApiKey } = context;
+  if (!model || !openRouterApiKey) {
+    debug('[summarize] Missing model or API key for OpenRouter summarization');
+    return response.substring(0, 40000) + '\n\n[Result truncated due to size]';
+  }
+
+  // Build context
+  let inputContext = 'No specific parameters provided.';
+  if (context.input) {
+    try {
+      inputContext = `Request parameters: ${JSON.stringify(context.input)}`;
+    } catch {
+      inputContext = 'Request parameters: [non-serializable input]';
+    }
+  }
+
+  const endpointContext = context.path ? `Endpoint: ${context.path}` : '';
+  const intentContext = context.modelIntent
+    ? `The AI assistant's goal: "${context.modelIntent.slice(-500)}"`
+    : context.userRequest
+      ? `User's original request: "${context.userRequest.slice(0, 300)}"`
+      : '';
+
+  // Truncate response
+  const maxChars = MAX_SUMMARIZATION_INPUT * 4;
+  const truncatedResponse = response.length > maxChars
+    ? response.substring(0, maxChars) + '\n\n[... truncated for summarization ...]'
+    : response;
+  const wasTruncated = response.length > maxChars;
+
+  const prompt = `You are summarizing a tool result that was too large to fit in context.
+
+Tool: ${context.toolName}
+${endpointContext}
+${inputContext}
+${intentContext ? `\n${intentContext}` : ''}
+${wasTruncated ? '\nNote: The response was truncated before summarization due to extreme size.' : ''}
+
+Your task:
+1. Extract the MOST RELEVANT information based on the stated goal or request above
+2. Preserve key data points, IDs, URLs, and actionable information that relate to the goal
+3. Summarize long text content but keep essential details needed to complete the task
+4. Format the output cleanly for the AI assistant to use
+
+Tool result to summarize:
+${truncatedResponse}
+
+Provide a concise but comprehensive summary that captures the essential information needed to accomplish the stated goal.`;
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openRouterApiKey}`,
+        'HTTP-Referer': 'https://craft-agents.app',
+        'X-Title': 'Craft Agents',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 4096,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      debug(`[summarize] OpenRouter summarization failed: ${response.status} ${errorText}`);
+      return truncatedResponse.substring(0, 40000) + '\n\n[Result truncated due to size]';
+    }
+
+    const data = await response.json() as any;
+    const summary = data.choices?.[0]?.message?.content;
+    if (summary && typeof summary === 'string') {
+      debug(`[summarize] Successfully summarized with ${model}`);
+      return summary;
+    }
+
+    debug('[summarize] OpenRouter response missing content');
+    return truncatedResponse.substring(0, 40000) + '\n\n[Result truncated due to size]';
+  } catch (error) {
+    debug(`[summarize] OpenRouter summarization error: ${error}`);
+    return truncatedResponse.substring(0, 40000) + '\n\n[Result truncated due to size]';
   }
 }

@@ -237,6 +237,14 @@ const api: ElectronAPI = {
   },
   getMcpTools: (workspaceId: string, sourceSlug: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.SOURCES_GET_MCP_TOOLS, workspaceId, sourceSlug),
+  callMcpTool: (workspaceId: string, sourceSlug: string, toolName: string, args: Record<string, unknown>) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SOURCES_CALL_MCP_TOOL, workspaceId, sourceSlug, toolName, args),
+
+  // Apple Reminders (native AppleScript)
+  getAppleReminders: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.APPLE_REMINDERS_GET),
+  completeAppleReminder: (reminderName: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.APPLE_REMINDERS_COMPLETE, reminderName),
 
   // Status management
   listStatuses: (workspaceId: string) =>
@@ -370,6 +378,17 @@ const api: ElectronAPI = {
       ipcRenderer.removeListener(IPC_CHANNELS.NOTIFICATION_NAVIGATE, handler)
     }
   },
+
+  // OpenRouter API (Chat mode)
+  getOpenRouterModels: () => ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_GET_MODELS),
+  getOpenRouterApiKey: () => ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_GET_API_KEY),
+  setOpenRouterApiKey: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_SET_API_KEY, key),
+  deleteOpenRouterApiKey: () => ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_DELETE_API_KEY),
+
+  // OpenAI OAuth (Chat mode - direct via Codex login)
+  getOpenAIOAuthConfigured: () => ipcRenderer.invoke(IPC_CHANNELS.OPENAI_GET_OAUTH_CONFIGURED),
+  importCodexAuth: () => ipcRenderer.invoke(IPC_CHANNELS.OPENAI_IMPORT_CODEX_AUTH),
+  deleteOpenAIOAuth: () => ipcRenderer.invoke(IPC_CHANNELS.OPENAI_DELETE_OAUTH),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

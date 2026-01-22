@@ -25,6 +25,10 @@ export interface SidebarContextMenuConfig {
   onAddSource?: () => void
   /** Handler for "Add Skill" action - for skills type */
   onAddSkill?: () => void
+  /** Handler for "Open in New Agent Session" for starred docs */
+  onOpenInNewSession?: () => void
+  /** Handler for "Open in Reminders App" */
+  onOpenInRemindersApp?: () => void
   /** Source type filter for "Learn More" link - determines which docs page to open */
   sourceType?: 'api' | 'mcp' | 'local'
 }
@@ -48,6 +52,8 @@ export interface LinkItem {
   dataTutorial?: string // data-tutorial attribute for tutorial targeting
   // Context menu configuration (optional - if provided, right-click shows context menu)
   contextMenu?: SidebarContextMenuConfig
+  /** Optional class name for the title text */
+  titleClassName?: string
 }
 
 export interface SeparatorItem {
@@ -141,7 +147,7 @@ export function LeftSidebar({ links, isCollapsed, getItemProps, focusedItemId, i
     <div className={cn("flex flex-col select-none", !isNested && "py-1")}>
       <NavWrapper
         className={cn(
-          "grid gap-0.5",
+          "flex flex-col gap-0.5",
           isNested ? "pl-5 pr-0 relative" : "px-2"
         )}
         role="navigation"
@@ -176,7 +182,7 @@ export function LeftSidebar({ links, isCollapsed, getItemProps, focusedItemId, i
               onClick={link.onClick}
               data-tutorial={link.dataTutorial}
               className={cn(
-                "group flex w-full items-center gap-2 rounded-[6px] py-[5px] text-[13px] select-none outline-none",
+                "group flex w-full items-center justify-start gap-2 rounded-[6px] py-[5px] text-[13px] select-none outline-none",
                 "focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
                 // Same padding for all items
                 "px-2",
@@ -213,7 +219,11 @@ export function LeftSidebar({ links, isCollapsed, getItemProps, focusedItemId, i
                   renderIcon(link)
                 )}
               </span>
-              {link.title}
+              {link.titleClassName ? (
+                <span className={link.titleClassName}>{link.title}</span>
+              ) : (
+                link.title
+              )}
               {/* Label Badge: Shows count or status on the right */}
               {link.label && (
                 <span className="ml-auto text-xs text-foreground/30 opacity-0 group-hover/section:opacity-100 transition-opacity">
@@ -257,7 +267,7 @@ export function LeftSidebar({ links, isCollapsed, getItemProps, focusedItemId, i
           const content = link.contextMenu ? (
             <ContextMenu modal={true}>
               <ContextMenuTrigger asChild>
-                <div className="group/section">
+                <div className="w-full group/section">
                   {innerContent}
                 </div>
               </ContextMenuTrigger>
@@ -269,13 +279,15 @@ export function LeftSidebar({ links, isCollapsed, getItemProps, focusedItemId, i
                     onConfigureStatuses={link.contextMenu.onConfigureStatuses}
                     onAddSource={link.contextMenu.onAddSource}
                     onAddSkill={link.contextMenu.onAddSkill}
+                    onOpenInNewSession={link.contextMenu.onOpenInNewSession}
+                    onOpenInRemindersApp={link.contextMenu.onOpenInRemindersApp}
                     sourceType={link.contextMenu.sourceType}
                   />
                 </ContextMenuProvider>
               </StyledContextMenuContent>
             </ContextMenu>
           ) : (
-            <div className="group/section">
+            <div className="w-full group/section">
               {innerContent}
             </div>
           )

@@ -42,6 +42,8 @@ export interface SessionMeta {
   isAsyncOperationOngoing?: boolean
   /** @deprecated Use isAsyncOperationOngoing instead */
   isRegeneratingTitle?: boolean
+  /** Runtime type (claude for agent mode, openrouter-chat for chat mode) */
+  runtime?: 'claude' | 'openrouter-chat'
 }
 
 /**
@@ -83,6 +85,7 @@ export function extractSessionMeta(session: Session): SessionMeta {
     // Use isAsyncOperationOngoing if available, fall back to deprecated isRegeneratingTitle
     isAsyncOperationOngoing: session.isAsyncOperationOngoing ?? session.isRegeneratingTitle,
     isRegeneratingTitle: session.isRegeneratingTitle,
+    runtime: session.runtime,
   }
 }
 
@@ -210,7 +213,7 @@ export const updateStreamingContentAtom = atom(
 
     // Append to existing streaming message
     if (lastMsg?.role === 'assistant' && lastMsg.isStreaming &&
-        (!turnId || lastMsg.turnId === turnId)) {
+      (!turnId || lastMsg.turnId === turnId)) {
       messages[messages.length - 1] = {
         ...lastMsg,
         content: lastMsg.content + content,

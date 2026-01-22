@@ -55,6 +55,7 @@ export function readSessionJsonl(sessionFile: string): StoredSession | null {
 
     return {
       id: header.id,
+      runtime: header.runtime,
       workspaceRootPath: expandPath(header.workspaceRootPath),
       createdAt: header.createdAt,
       lastUsedAt: header.lastUsedAt,
@@ -102,6 +103,7 @@ export function writeSessionJsonl(sessionFile: string, session: StoredSession): 
 export function createSessionHeader(session: StoredSession): SessionHeader {
   return {
     id: session.id,
+    runtime: session.runtime,
     workspaceRootPath: toPortablePath(session.workspaceRootPath),
     createdAt: session.createdAt,
     lastUsedAt: Date.now(),

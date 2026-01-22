@@ -36,6 +36,17 @@ export const KEYS = {
 
   // Working directory
   recentWorkingDirs: 'recent-working-dirs',
+
+  // App mode (agent vs chat)
+  appMode: 'app-mode',
+  // Last selected session per mode (for quick switching)
+  lastAgentSessionId: 'last-agent-session-id',
+  lastChatSessionId: 'last-chat-session-id',
+  // Default sources for new Chat sessions (OpenRouter mode)
+  chatDefaultSourceSlugs: 'chat-default-source-slugs',
+
+  // OpenRouter Chat mode
+  openrouterLastModel: 'openrouter-last-model',
 } as const
 
 export type StorageKey = typeof KEYS[keyof typeof KEYS]

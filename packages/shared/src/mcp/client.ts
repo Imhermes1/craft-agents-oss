@@ -51,7 +51,6 @@ const BLOCKED_ENV_VARS = [
   // Common API keys/tokens
   'GITHUB_TOKEN',
   'GH_TOKEN',
-  'OPENAI_API_KEY',
   'GOOGLE_API_KEY',
   'STRIPE_SECRET_KEY',
   'NPM_TOKEN',

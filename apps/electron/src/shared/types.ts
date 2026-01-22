@@ -88,6 +88,40 @@ export interface OAuthResult {
 }
 
 /**
+ * Session runtime discriminator
+ * - 'claude': Uses CraftAgent with Claude SDK (Agent mode)
+ * - 'openrouter-chat': Uses OpenRouterRuntime (Chat mode)
+ */
+export type SessionRuntime = 'claude' | 'openrouter-chat'
+
+/**
+ * OpenRouter model metadata from API
+ */
+export interface OpenRouterModel {
+  id: string
+  name: string
+  description?: string
+  context_length: number
+  pricing: {
+    prompt: string
+    completion: string
+    image?: string
+  }
+  architecture?: {
+    modality: string
+    tokenizer: string
+  }
+  /**
+   * OpenAI-compatible parameter support flags from OpenRouter (when available).
+   * Used for filtering (e.g., tool calling).
+   */
+  supported_parameters?: string[]
+  top_provider?: {
+    max_completion_tokens?: number
+  }
+}
+
+/**
  * MCP connection validation result
  */
 export interface McpValidationResult {
@@ -279,6 +313,8 @@ export interface Session {
   sharedId?: string
   // Model to use for this session (overrides global config if set)
   model?: string
+  // Runtime for this session (defaults to 'claude' for Agent mode)
+  runtime?: SessionRuntime
   // Thinking level for this session ('off', 'think', 'max')
   thinkingLevel?: ThinkingLevel
   // Role/type of the last message (for badge display without loading messages)
@@ -321,6 +357,10 @@ export interface CreateSessionOptions {
    * - Absolute path string: Use this specific path
    */
   workingDirectory?: string | 'user_default' | 'none'
+  /** Runtime for this session (defaults to 'claude') */
+  runtime?: SessionRuntime
+  /** Model for this session (used with openrouter-chat runtime) */
+  model?: string
 }
 
 // Events sent from main to renderer
@@ -563,7 +603,7 @@ export const IPC_CHANNELS = {
   SOURCES_START_OAUTH: 'sources:startOAuth',
   SOURCES_SAVE_CREDENTIALS: 'sources:saveCredentials',
   SOURCES_CHANGED: 'sources:changed',
-  
+
   // Source permissions config
   SOURCES_GET_PERMISSIONS: 'sources:getPermissions',
   // Workspace permissions config (for Explore mode)
@@ -572,8 +612,13 @@ export const IPC_CHANNELS = {
   DEFAULT_PERMISSIONS_GET: 'permissions:getDefaults',
   // Broadcast when default permissions change (file watcher)
   DEFAULT_PERMISSIONS_CHANGED: 'permissions:defaultsChanged',
-  // MCP tools listing
+  // MCP tools listing and calling
   SOURCES_GET_MCP_TOOLS: 'sources:getMcpTools',
+  SOURCES_CALL_MCP_TOOL: 'sources:callTool',
+
+  // Apple Reminders (native AppleScript integration)
+  APPLE_REMINDERS_GET: 'appleReminders:get',
+  APPLE_REMINDERS_COMPLETE: 'appleReminders:complete',
 
   // Skills (workspace-scoped)
   SKILLS_GET: 'skills:get',
@@ -622,6 +667,17 @@ export const IPC_CHANNELS = {
   BADGE_DRAW: 'badge:draw',  // Broadcast: { count: number, iconDataUrl: string }
   WINDOW_FOCUS_STATE: 'window:focusState',  // Broadcast: boolean (isFocused)
   WINDOW_GET_FOCUS_STATE: 'window:getFocusState',
+
+  // OpenRouter API (Chat mode)
+  OPENROUTER_GET_MODELS: 'openrouter:getModels',
+  OPENROUTER_GET_API_KEY: 'openrouter:getApiKey',
+  OPENROUTER_SET_API_KEY: 'openrouter:setApiKey',
+  OPENROUTER_DELETE_API_KEY: 'openrouter:deleteApiKey',
+
+  // OpenAI OAuth (Chat mode - direct via Codex login)
+  OPENAI_GET_OAUTH_CONFIGURED: 'openai:getOAuthConfigured',
+  OPENAI_IMPORT_CODEX_AUTH: 'openai:importCodexAuth',
+  OPENAI_DELETE_OAUTH: 'openai:deleteOAuth',
 } as const
 
 // Re-import types for ElectronAPI
@@ -779,6 +835,11 @@ export interface ElectronAPI {
   getWorkspacePermissionsConfig(workspaceId: string): Promise<import('@craft-agent/shared/agent').PermissionsConfigFile | null>
   getDefaultPermissionsConfig(): Promise<{ config: import('@craft-agent/shared/agent').PermissionsConfigFile | null; path: string }>
   getMcpTools(workspaceId: string, sourceSlug: string): Promise<McpToolsResult>
+  callMcpTool(workspaceId: string, sourceSlug: string, toolName: string, args: Record<string, unknown>): Promise<any>
+
+  // Apple Reminders (native AppleScript)
+  getAppleReminders(): Promise<{ success: boolean; reminders?: any[]; error?: string }>
+  completeAppleReminder(reminderName: string): Promise<{ success: boolean; error?: string }>
 
   // Sources change listener (live updates when sources are added/removed)
   onSourcesChanged(callback: (sources: LoadedSource[]) => void): () => void
@@ -835,6 +896,19 @@ export interface ElectronAPI {
   // Theme preferences sync across windows (mode, colorTheme, font)
   broadcastThemePreferences(preferences: { mode: string; colorTheme: string; font: string }): Promise<void>
   onThemePreferencesChange(callback: (preferences: { mode: string; colorTheme: string; font: string }) => void): () => void
+
+  // OpenRouter API (Chat mode)
+  getOpenRouterModels(): Promise<OpenRouterModel[]>
+  getOpenRouterApiKey(): Promise<string | null>
+  setOpenRouterApiKey(key: string): Promise<void>
+  deleteOpenRouterApiKey(): Promise<boolean>
+
+  // OpenAI OAuth (Chat mode - direct via Codex login)
+  getOpenAIOAuthConfigured(): Promise<boolean>
+  /** Import Codex CLI login from ~/.codex/auth.json */
+  importCodexAuth(): Promise<{ success: boolean; error?: string }>
+  /** Delete stored OpenAI OAuth token */
+  deleteOpenAIOAuth(): Promise<boolean>
 }
 
 /**
@@ -990,6 +1064,17 @@ export interface SkillsNavigationState {
 }
 
 /**
+ * Chat navigation state - shows ChatModePanel in navigator (OpenRouter chat mode)
+ */
+export interface ChatNavigationState {
+  navigator: 'chat'
+  /** Selected chat details, or null for homepage */
+  details: { type: 'chat'; sessionId: string } | null
+  /** Optional right sidebar panel state */
+  rightSidebar?: RightSidebarPanel
+}
+
+/**
  * Unified navigation state - single source of truth for all 3 panels
  *
  * From this state we can derive:
@@ -999,6 +1084,7 @@ export interface SkillsNavigationState {
  */
 export type NavigationState =
   | ChatsNavigationState
+  | ChatNavigationState
   | SourcesNavigationState
   | SettingsNavigationState
   | SkillsNavigationState
@@ -1030,6 +1116,13 @@ export const isSettingsNavigation = (
 export const isSkillsNavigation = (
   state: NavigationState
 ): state is SkillsNavigationState => state.navigator === 'skills'
+
+/**
+ * Type guard to check if state is chat navigation (OpenRouter chat mode)
+ */
+export const isChatNavigation = (
+  state: NavigationState
+): state is ChatNavigationState => state.navigator === 'chat'
 
 /**
  * Default navigation state - allChats with no selection
@@ -1064,7 +1157,14 @@ export const getNavigationStateKey = (state: NavigationState): string => {
   if (state.navigator === 'settings') {
     return `settings:${state.subpage}`
   }
-  // Chats
+  // Chat (OpenRouter mode)
+  if (state.navigator === 'chat') {
+    if (state.details) {
+      return `chat/session/${state.details.sessionId}`
+    }
+    return 'chat'
+  }
+  // Chats (Agent mode)
   const f = state.filter
   let base: string
   if (f.kind === 'state') base = `state:${f.stateId}`
@@ -1121,6 +1221,16 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
     if (['app', 'workspace', 'shortcuts', 'preferences'].includes(subpage)) {
       return { navigator: 'settings', subpage }
     }
+  }
+
+  // Handle chat (OpenRouter mode)
+  if (key === 'chat') return { navigator: 'chat', details: null }
+  if (key.startsWith('chat/session/')) {
+    const sessionId = key.slice(13)
+    if (sessionId) {
+      return { navigator: 'chat', details: { type: 'chat', sessionId } }
+    }
+    return { navigator: 'chat', details: null }
   }
 
   // Handle chats - parse filter and optional session

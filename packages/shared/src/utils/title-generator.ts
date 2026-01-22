@@ -7,16 +7,23 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { getDefaultOptions } from '../agent/options.ts';
 import { SUMMARIZATION_MODEL } from '../config/models.ts';
 
+export interface TitleOptions {
+  model?: string;
+  apiKey?: string;
+}
+
 /**
  * Generate a task-focused title (2-5 words) from the user's first message.
  * Extracts what the user is trying to accomplish, framing conversations as tasks.
  * Uses SDK query() which handles all auth types via getDefaultOptions().
  *
  * @param userMessage - The user's first message
+ * @param titleOptions - Optional model and API key (for OpenRouter/Chat mode)
  * @returns Generated task title, or null if generation fails
  */
 export async function generateSessionTitle(
-  userMessage: string
+  userMessage: string,
+  titleOptions?: TitleOptions
 ): Promise<string | null> {
   try {
     const userSnippet = userMessage.slice(0, 500);
@@ -31,10 +38,31 @@ export async function generateSessionTitle(
       'Task:',
     ].join('\n');
 
+    // If OpenRouter API key is provided, use direct fetch
+    if (titleOptions?.apiKey) {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${titleOptions.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: titleOptions.model || SUMMARIZATION_MODEL,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as any;
+        const content = data.choices?.[0]?.message?.content;
+        if (content) return content.trim();
+      }
+    }
+
     const defaultOptions = getDefaultOptions();
     const options = {
       ...defaultOptions,
-      model: SUMMARIZATION_MODEL,
+      model: titleOptions?.model || SUMMARIZATION_MODEL,
       maxTurns: 1,
     };
 
@@ -71,11 +99,13 @@ export async function generateSessionTitle(
  *
  * @param recentUserMessages - The last few user messages (most recent context)
  * @param lastAssistantResponse - The most recent assistant response
+ * @param titleOptions - Optional model and API key (for OpenRouter/Chat mode)
  * @returns Generated title reflecting current session focus, or null if generation fails
  */
 export async function regenerateSessionTitle(
   recentUserMessages: string[],
-  lastAssistantResponse: string
+  lastAssistantResponse: string,
+  titleOptions?: TitleOptions
 ): Promise<string | null> {
   try {
     // Combine recent user messages, taking up to 300 chars from each
@@ -99,10 +129,31 @@ export async function regenerateSessionTitle(
       'Current focus:',
     ].join('\n');
 
+    // If OpenRouter API key is provided, use direct fetch
+    if (titleOptions?.apiKey) {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${titleOptions.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: titleOptions.model || SUMMARIZATION_MODEL,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as any;
+        const content = data.choices?.[0]?.message?.content;
+        if (content) return content.trim();
+      }
+    }
+
     const defaultOptions = getDefaultOptions();
     const options = {
       ...defaultOptions,
-      model: SUMMARIZATION_MODEL,
+      model: titleOptions?.model || SUMMARIZATION_MODEL,
       maxTurns: 1,
     };
 

@@ -227,7 +227,7 @@ When spawning local MCP servers (stdio transport), sensitive environment variabl
 
 - `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` (app auth)
 - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
-- `GITHUB_TOKEN`, `GH_TOKEN`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `STRIPE_SECRET_KEY`, `NPM_TOKEN`
+- `GITHUB_TOKEN`, `GH_TOKEN`, `GOOGLE_API_KEY`, `STRIPE_SECRET_KEY`, `NPM_TOKEN`
 
 To explicitly pass an env var to a specific MCP server, use the `env` field in the source config.
 

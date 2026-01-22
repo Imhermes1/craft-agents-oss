@@ -54,6 +54,7 @@ import type {
 } from '../../shared/types'
 import {
   isChatsNavigation,
+  isChatNavigation,
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
@@ -69,7 +70,7 @@ export type { Route }
 
 // Re-export navigation state types for consumers
 export type { NavigationState, ChatFilter }
-export { isChatsNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation }
+export { isChatsNavigation, isChatNavigation, isSourcesNavigation, isSettingsNavigation, isSkillsNavigation }
 
 interface NavigationContextValue {
   /** Navigate to a route */
@@ -216,6 +217,14 @@ export function NavigationProvider({
           if (parsed.params.workdir) {
             createOptions.workingDirectory = parsed.params.workdir as 'user_default' | 'none' | string
           }
+          // Handle runtime param for Chat mode (openrouter-chat)
+          if (parsed.params.runtime && ['claude', 'openrouter-chat'].includes(parsed.params.runtime)) {
+            createOptions.runtime = parsed.params.runtime as 'claude' | 'openrouter-chat'
+          }
+          // Handle model param (for openrouter-chat runtime)
+          if (parsed.params.model) {
+            createOptions.model = parsed.params.model
+          }
           const session = await onCreateSession(workspaceId, createOptions)
 
           // Rename session if name provided
@@ -223,13 +232,33 @@ export function NavigationProvider({
             await window.electronAPI.sessionCommand(session.id, { type: 'rename', name: parsed.params.name })
           }
 
-          // Update navigation state to show new chat in allChats
+          // Enable sources for the session if requested (comma-separated slugs)
+          if (parsed.params.sources) {
+            const sourceSlugs = parsed.params.sources
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean)
+            if (sourceSlugs.length > 0) {
+              await window.electronAPI.sessionCommand(session.id, { type: 'setSources', sourceSlugs })
+            }
+          }
+
+          // Update navigation state based on runtime
           setSession({ selected: session.id })
-          setNavigationState({
-            navigator: 'chats',
-            filter: { kind: 'allChats' },
-            details: { type: 'chat', sessionId: session.id },
-          })
+          if (createOptions.runtime === 'openrouter-chat') {
+            // Navigate to chat navigator for OpenRouter sessions
+            setNavigationState({
+              navigator: 'chat',
+              details: { type: 'chat', sessionId: session.id },
+            })
+          } else {
+            // Navigate to chats navigator for agent sessions
+            setNavigationState({
+              navigator: 'chats',
+              filter: { kind: 'allChats' },
+              details: { type: 'chat', sessionId: session.id },
+            })
+          }
 
           // Parse badges from params (JSON-encoded, used for EditPopover context hiding)
           let badges: ContentBadge[] | undefined

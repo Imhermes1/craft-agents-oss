@@ -54,6 +54,12 @@ export type { StoredMessage } from '@craft-agent/core/types';
  */
 export interface SessionConfig {
   id: string;
+  /**
+   * Session runtime discriminator.
+   * - 'claude': Claude SDK agent runtime (Agent mode)
+   * - 'openrouter-chat': OpenRouter chat runtime (Chat mode)
+   */
+  runtime?: 'claude' | 'openrouter-chat';
   /** SDK session ID (captured after first message) */
   sdkSessionId?: string;
   /** Workspace root path this session belongs to */
@@ -113,6 +119,8 @@ export interface StoredSession extends SessionConfig {
  */
 export interface SessionHeader {
   id: string;
+  /** Session runtime discriminator (see SessionConfig.runtime) */
+  runtime?: 'claude' | 'openrouter-chat';
   /** SDK session ID (captured after first message) */
   sdkSessionId?: string;
   /** Workspace root path (stored as portable path, e.g., ~/.craft-agent/...) */
@@ -171,6 +179,8 @@ export interface SessionHeader {
 export interface SessionMetadata {
   id: string;
   workspaceRootPath: string;
+  /** Session runtime discriminator (see SessionConfig.runtime) */
+  runtime?: 'claude' | 'openrouter-chat';
   name?: string;
   createdAt: number;
   lastUsedAt: number;

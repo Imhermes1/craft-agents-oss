@@ -50,6 +50,8 @@ import { AttachmentPreview } from '../AttachmentPreview'
 import { MODELS, getModelShortName } from '@config/models'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { FreeFormInputContextBadge } from './FreeFormInputContextBadge'
+import { ChatModelSelector } from '../ChatModelSelector'
+import { ChatModeSourcesSelector } from '@/components/app-shell/chat-mode/ChatModeSourcesSelector'
 import type { FileAttachment, LoadedSource, LoadedSkill } from '../../../../shared/types'
 import type { PermissionMode } from '@craft-agent/shared/agent/modes'
 import { PERMISSION_MODE_ORDER } from '@craft-agent/shared/agent/modes'
@@ -152,6 +154,10 @@ export interface FreeFormInputProps {
     /** Model's context window size in tokens */
     contextWindow?: number
   }
+  /** Hide the built-in Claude model selector (Chat mode uses its own selector) */
+  hideModelSelector?: boolean
+  /** Show Chat mode OpenRouter model selector at bottom */
+  showChatModeModelSelector?: boolean
 }
 
 /**
@@ -197,6 +203,8 @@ export function FreeFormInput({
   disableSend = false,
   isEmptySession = false,
   contextStatus,
+  hideModelSelector = false,
+  showChatModeModelSelector = false,
 }: FreeFormInputProps) {
   // Performance optimization: Always use internal state for typing to avoid parent re-renders
   // Sync FROM parent on mount/change (for restoring drafts)
@@ -1069,8 +1077,8 @@ export function FreeFormInput({
             disabled={disabled}
           />
 
-          {/* 2. Source Selector Badge - only show if onSourcesChange is provided */}
-          {onSourcesChange && (
+          {/* 2. Source Selector Badge - only show if onSourcesChange is provided and not using chat mode selector */}
+          {onSourcesChange && !showChatModeModelSelector && (
             <div className="relative">
               <FreeFormInputContextBadge
                 buttonRef={sourceButtonRef}
@@ -1242,7 +1250,38 @@ export function FreeFormInput({
           {/* Spacer */}
           <div className="flex-1" />
 
-          {/* 5. Model Selector - Radix DropdownMenu for automatic positioning and submenu support */}
+          {/* 5a. Chat Mode Sources Selector (next to model picker) */}
+          {showChatModeModelSelector && onSourcesChange && (
+            <ChatModeSourcesSelector
+              sources={sources}
+              enabledSourceSlugs={optimisticSourceSlugs}
+              onChange={(newSlugs) => {
+                setOptimisticSourceSlugs(newSlugs)
+                onSourcesChange?.(newSlugs)
+              }}
+            />
+          )}
+
+          {/* 5a. Chat Mode OpenRouter Model Selector */}
+          {showChatModeModelSelector && (
+            <ChatModelSelector
+              selectedModel={(() => {
+                const isOpenRouterStyle = currentModel.includes('/')
+                const isOpenAIDirect = currentModel.startsWith('gpt-')
+                const [provider, name] = isOpenRouterStyle ? currentModel.split('/', 2) : [undefined, undefined]
+                return {
+                  id: currentModel,
+                  name: isOpenRouterStyle ? (name || currentModel) : currentModel,
+                  provider: isOpenRouterStyle ? (provider || 'OpenAI') : (isOpenAIDirect ? 'OpenAI (Direct)' : 'OpenAI'),
+                  tags: [],
+                }
+              })()}
+              onSelectModel={(model) => onModelChange(model.id)}
+            />
+          )}
+
+          {/* 5. Model Selector - Claude runtime only (Chat mode has its own selector) */}
+          {!hideModelSelector && (
           <DropdownMenu open={modelDropdownOpen} onOpenChange={setModelDropdownOpen}>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1344,6 +1383,7 @@ export function FreeFormInput({
               )}
             </StyledDropdownMenuContent>
           </DropdownMenu>
+          )}
 
           {/* 5.5 Context Usage Warning Badge - shows when approaching auto-compaction threshold */}
           {(() => {

@@ -17,6 +17,7 @@ import { rendererPerf } from '@/lib/perf'
 import { routes } from '@/lib/navigate'
 import { ensureSessionMessagesLoadedAtom, loadedSessionsAtom, sessionMetaMapAtom } from '@/atoms/sessions'
 import { getSessionTitle } from '@/utils/session'
+import { isClaudeModel } from '@craft-agent/shared/config/models'
 
 export interface ChatPageProps {
   sessionId: string
@@ -160,7 +161,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   }, [sessionId, activeWorkspaceId])
 
   // Effective model for this session (session-specific or global fallback)
-  const effectiveModel = session?.model || currentModel
+  // In Agent mode, only use Claude models - fall back if session has OpenRouter model
+  const effectiveModel = (session?.model && isClaudeModel(session.model)) ? session.model : currentModel
 
   // Working directory for this session
   const workingDirectory = session?.workingDirectory

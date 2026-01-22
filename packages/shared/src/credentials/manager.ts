@@ -244,6 +244,56 @@ export class CredentialManager {
     // Consider expired if within 5 minutes of expiry
     return Date.now() > credential.expiresAt - 5 * 60 * 1000;
   }
+
+  /** Get OpenRouter API key */
+  async getOpenRouterApiKey(): Promise<string | null> {
+    const cred = await this.get({ type: 'openrouter_api_key' });
+    return cred?.value || null;
+  }
+
+  /** Set OpenRouter API key */
+  async setOpenRouterApiKey(key: string): Promise<void> {
+    await this.set({ type: 'openrouter_api_key' }, { value: key });
+  }
+
+  /** Delete OpenRouter API key */
+  async deleteOpenRouterApiKey(): Promise<boolean> {
+    return await this.delete({ type: 'openrouter_api_key' });
+  }
+
+  /** Get OpenAI OAuth credentials (Codex/ChatGPT login) */
+  async getOpenAIOAuthCredentials(): Promise<{
+    accessToken: string;
+    refreshToken?: string;
+    expiresAt?: number;
+  } | null> {
+    const cred = await this.get({ type: 'openai_oauth' });
+    if (!cred) return null;
+
+    return {
+      accessToken: cred.value,
+      refreshToken: cred.refreshToken,
+      expiresAt: cred.expiresAt,
+    };
+  }
+
+  /** Set OpenAI OAuth credentials (Codex/ChatGPT login) */
+  async setOpenAIOAuthCredentials(credentials: {
+    accessToken: string;
+    refreshToken?: string;
+    expiresAt?: number;
+  }): Promise<void> {
+    await this.set({ type: 'openai_oauth' }, {
+      value: credentials.accessToken,
+      refreshToken: credentials.refreshToken,
+      expiresAt: credentials.expiresAt,
+    });
+  }
+
+  /** Delete OpenAI OAuth credentials */
+  async deleteOpenAIOAuthCredentials(): Promise<boolean> {
+    return await this.delete({ type: 'openai_oauth' });
+  }
 }
 
 // Singleton instance

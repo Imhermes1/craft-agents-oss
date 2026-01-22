@@ -1,6 +1,7 @@
 export * from './craft-agent.ts';
 export * from './errors.ts';
 export * from './options.ts';
+export * from './openrouter-runtime.ts';
 
 // Export session-scoped-tools - tools scoped to a specific session
 export {

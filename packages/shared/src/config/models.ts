@@ -60,3 +60,8 @@ export function getModelShortName(modelId: string): string {
 export function isOpusModel(modelId: string): boolean {
   return modelId.includes('opus');
 }
+
+/** Check if model is a valid Claude model (not OpenRouter or other provider) */
+export function isClaudeModel(modelId: string): boolean {
+  return MODELS.some(m => m.id === modelId) || modelId.startsWith('claude-');
+}

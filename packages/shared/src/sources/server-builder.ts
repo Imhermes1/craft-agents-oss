@@ -176,6 +176,19 @@ export class SourceServerBuilder {
       return createApiServer(config, getToken);
     }
 
+    // Microsoft APIs - use token getter with auto-refresh
+    if (provider === 'microsoft') {
+      if (!source.config.isAuthenticated || !getToken) {
+        debug(`[SourceServerBuilder] Microsoft API source ${source.config.slug} not authenticated`);
+        return null;
+      }
+      debug(`[SourceServerBuilder] Building Microsoft API server for ${source.config.slug}`);
+      const config = this.buildApiConfig(source);
+      // Pass the token getter function - it will be called before each request
+      // to get a fresh token (with auto-refresh if expired)
+      return createApiServer(config, getToken);
+    }
+
     // Public APIs (no auth) can be used immediately
     if (authType === 'none') {
       debug(`[SourceServerBuilder] Building public API server for ${source.config.slug}`);

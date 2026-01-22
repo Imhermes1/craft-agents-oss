@@ -21,11 +21,12 @@ import {
   Settings2,
   Plus,
   ExternalLink,
+  Zap,
 } from 'lucide-react'
 import { useMenuComponents } from '@/components/ui/menu-context'
 import { getDocUrl, type DocFeature } from '@craft-agent/shared/docs/doc-links'
 
-export type SidebarMenuType = 'allChats' | 'flagged' | 'status' | 'sources' | 'skills' | 'newChat'
+export type SidebarMenuType = 'allChats' | 'flagged' | 'status' | 'sources' | 'skills' | 'newChat' | 'starredDoc' | 'reminder'
 
 export interface SidebarMenuProps {
   /** Type of sidebar item (determines available menu items) */
@@ -38,8 +39,12 @@ export interface SidebarMenuProps {
   onAddSource?: () => void
   /** Handler for "Add Skill" action - only for skills type */
   onAddSkill?: () => void
+  /** Handler for "Open in New Agent Session" for starred docs */
+  onOpenInNewSession?: () => void
   /** Source type filter for "Learn More" link - determines which docs page to open */
   sourceType?: 'api' | 'mcp' | 'local'
+  /** Handler for "Open in Reminders App" */
+  onOpenInRemindersApp?: () => void
 }
 
 /**
@@ -52,7 +57,9 @@ export function SidebarMenu({
   onConfigureStatuses,
   onAddSource,
   onAddSkill,
+  onOpenInNewSession,
   sourceType,
+  onOpenInRemindersApp,
 }: SidebarMenuProps) {
   // Get menu components from context (works with both DropdownMenu and ContextMenu)
   const { MenuItem, Separator } = useMenuComponents()
@@ -116,6 +123,26 @@ export function SidebarMenu({
       <MenuItem onClick={onAddSkill}>
         <Plus className="h-3.5 w-3.5" />
         <span className="flex-1">Add Skill</span>
+      </MenuItem>
+    )
+  }
+
+  // Starred Doc: show "Open in New Agent Session"
+  if (type === 'starredDoc' && onOpenInNewSession) {
+    return (
+      <MenuItem onClick={onOpenInNewSession}>
+        <Zap className="h-3.5 w-3.5" />
+        <span className="flex-1">Open in New Agent Session</span>
+      </MenuItem>
+    )
+  }
+
+  // Reminder: show "Open in Reminders App"
+  if (type === 'reminder' && onOpenInRemindersApp) {
+    return (
+      <MenuItem onClick={onOpenInRemindersApp}>
+        <ExternalLink className="h-3.5 w-3.5" />
+        <span className="flex-1">Open in Reminders App</span>
       </MenuItem>
     )
   }

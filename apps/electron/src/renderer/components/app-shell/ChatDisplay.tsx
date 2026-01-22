@@ -77,6 +77,8 @@ interface ChatDisplayProps {
   onSendMessage: (message: string, attachments?: FileAttachment[], skillSlugs?: string[]) => void
   onOpenFile: (path: string) => void
   onOpenUrl: (url: string) => void
+  /** Optional placeholder override for the input */
+  placeholder?: string | string[]
   // Model selection
   currentModel: string
   onModelChange: (model: string) => void
@@ -134,6 +136,12 @@ interface ChatDisplayProps {
   // Tutorial
   /** Disable send action (for tutorial guidance) */
   disableSend?: boolean
+  /** Chat mode: hide agent-only option badges (permission/ultrathink) */
+  hideOptionBadges?: boolean
+  /** Chat mode: hide built-in Claude model selector in input */
+  hideModelSelector?: boolean
+  /** Chat mode: show OpenRouter model selector at bottom */
+  showChatModeModelSelector?: boolean
 }
 
 /**
@@ -313,6 +321,7 @@ export function ChatDisplay({
   onSendMessage,
   onOpenFile,
   onOpenUrl,
+  placeholder,
   currentModel,
   onModelChange,
   textareaRef: externalTextareaRef,
@@ -347,6 +356,9 @@ export function ChatDisplay({
   messagesLoading = false,
   // Tutorial
   disableSend = false,
+  hideOptionBadges = false,
+  hideModelSelector = false,
+  showChatModeModelSelector = false,
 }: ChatDisplayProps) {
   // Input is only disabled when explicitly disabled (e.g., agent needs activation)
   // User can type during streaming - submitting will stop the stream and send
@@ -842,23 +854,26 @@ export function ChatDisplay({
             CHAT_LAYOUT.maxWidth,
             "mx-auto w-full px-4 pb-4 mt-1"
           )}>
-            {/* Active option badges and tasks - positioned above input */}
-            <ActiveOptionBadges
-              ultrathinkEnabled={ultrathinkEnabled}
-              onUltrathinkChange={onUltrathinkChange}
-              permissionMode={permissionMode}
-              onPermissionModeChange={onPermissionModeChange}
-              tasks={backgroundTasks}
-              sessionId={session.id}
-              onKillTask={(taskId) => killTask(taskId, backgroundTasks.find(t => t.id === taskId)?.type ?? 'shell')}
-              onInsertMessage={onInputChange}
-            />
+            {/* Active option badges (Agent mode only) - positioned above input */}
+            {!hideOptionBadges && (
+              <ActiveOptionBadges
+                ultrathinkEnabled={ultrathinkEnabled}
+                onUltrathinkChange={onUltrathinkChange}
+                permissionMode={permissionMode}
+                onPermissionModeChange={onPermissionModeChange}
+                tasks={backgroundTasks}
+                sessionId={session.id}
+                onKillTask={(taskId) => killTask(taskId, backgroundTasks.find(t => t.id === taskId)?.type ?? 'shell')}
+                onInsertMessage={onInputChange}
+              />
+            )}
             <InputContainer
               disabled={isInputDisabled}
               isProcessing={session.isProcessing}
               onSubmit={handleSubmit}
               onStop={handleStop}
               textareaRef={textareaRef}
+              placeholder={placeholder}
               currentModel={currentModel}
               onModelChange={onModelChange}
               thinkingLevel={thinkingLevel}
@@ -883,6 +898,8 @@ export function ChatDisplay({
               sessionId={session.id}
               disableSend={disableSend}
               isEmptySession={session.messages.length === 0}
+              hideModelSelector={hideModelSelector}
+              showChatModeModelSelector={showChatModeModelSelector}
               contextStatus={{
                 isCompacting: session.currentStatus?.statusType === 'compacting',
                 inputTokens: session.tokenUsage?.inputTokens,

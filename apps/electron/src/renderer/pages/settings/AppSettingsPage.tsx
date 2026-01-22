@@ -351,6 +351,22 @@ export default function AppSettingsPage() {
   // Notifications state
   const [notificationsEnabled, setNotificationsEnabled] = useState(true)
 
+  // OpenRouter state
+  const [openRouterApiKey, setOpenRouterApiKey] = useState('')
+  const [hasOpenRouterKey, setHasOpenRouterKey] = useState(false)
+  const [isLoadingOpenRouter, setIsLoadingOpenRouter] = useState(true)
+  const [isSavingOpenRouter, setIsSavingOpenRouter] = useState(false)
+  const [isEditingOpenRouter, setIsEditingOpenRouter] = useState(false)
+  const [showOpenRouterValue, setShowOpenRouterValue] = useState(false)
+  const [openRouterError, setOpenRouterError] = useState<string | undefined>()
+
+  // OpenAI state (direct via Codex login)
+  const [isLoadingOpenAI, setIsLoadingOpenAI] = useState(true)
+  const [isEditingOpenAI, setIsEditingOpenAI] = useState(false)
+  const [openAIError, setOpenAIError] = useState<string | undefined>()
+  const [hasOpenAIOAuth, setHasOpenAIOAuth] = useState(false)
+  const [isImportingCodexAuth, setIsImportingCodexAuth] = useState(false)
+
   // Auto-update state
   const updateChecker = useUpdateChecker()
   const [isCheckingForUpdates, setIsCheckingForUpdates] = useState(false)
@@ -419,6 +435,37 @@ export default function AppSettingsPage() {
     }
     checkExistingToken()
   }, [expandedMethod])
+
+  // Load OpenRouter API key status
+  useEffect(() => {
+    const loadKey = async () => {
+      if (!window.electronAPI) return
+      try {
+        const key = await window.electronAPI.getOpenRouterApiKey()
+        setHasOpenRouterKey(!!key)
+      } catch (err) {
+        console.error('Failed to load OpenRouter key:', err)
+      } finally {
+        setIsLoadingOpenRouter(false)
+      }
+    }
+    loadKey()
+  }, [])
+
+  // Load OpenAI OAuth (Codex login) status
+  useEffect(() => {
+    const load = async () => {
+      if (!window.electronAPI) return
+      try {
+        const configured = await window.electronAPI.getOpenAIOAuthConfigured()
+        setHasOpenAIOAuth(configured)
+      } catch (err) {
+        console.error('Failed to load OpenAI OAuth status:', err)
+      }
+      setIsLoadingOpenAI(false)
+    }
+    load()
+  }, [])
 
   // Handle clicking on a billing method option
   const handleMethodClick = useCallback(async (method: AuthType) => {
@@ -560,198 +607,462 @@ export default function AppSettingsPage() {
     await window.electronAPI.setNotificationsEnabled(enabled)
   }, [])
 
+  // OpenRouter handlers
+  const handleSaveOpenRouter = useCallback(async () => {
+    if (!window.electronAPI || !openRouterApiKey.trim()) return
+
+    setIsSavingOpenRouter(true)
+    setOpenRouterError(undefined)
+    try {
+      await window.electronAPI.setOpenRouterApiKey(openRouterApiKey.trim())
+      setHasOpenRouterKey(true)
+      setOpenRouterApiKey('')
+      setIsEditingOpenRouter(false)
+    } catch (err) {
+      console.error('Failed to save OpenRouter key:', err)
+      setOpenRouterError(err instanceof Error ? err.message : 'Failed to save API key')
+    } finally {
+      setIsSavingOpenRouter(false)
+    }
+  }, [openRouterApiKey])
+
+  const handleDeleteOpenRouter = useCallback(async () => {
+    if (!window.electronAPI) return
+
+    setIsSavingOpenRouter(true)
+    try {
+      await window.electronAPI.deleteOpenRouterApiKey()
+      setHasOpenRouterKey(false)
+      setOpenRouterApiKey('')
+      setIsEditingOpenRouter(false)
+    } catch (err) {
+      console.error('Failed to delete OpenRouter key:', err)
+    } finally {
+      setIsSavingOpenRouter(false)
+    }
+  }, [])
+
+  const handleCancelOpenRouter = useCallback(() => {
+    setIsEditingOpenRouter(false)
+    setOpenRouterApiKey('')
+    setOpenRouterError(undefined)
+  }, [])
+
+  const handleCancelOpenAI = useCallback(() => {
+    setIsEditingOpenAI(false)
+    setOpenAIError(undefined)
+  }, [])
+
+  const handleImportCodexAuth = useCallback(async () => {
+    if (!window.electronAPI) return
+
+    setIsImportingCodexAuth(true)
+    setOpenAIError(undefined)
+    try {
+      const result = await window.electronAPI.importCodexAuth()
+      if (!result.success) {
+        setOpenAIError(result.error || 'Failed to import Codex login')
+        return
+      }
+      setHasOpenAIOAuth(true)
+      setIsEditingOpenAI(false)
+    } catch (err) {
+      setOpenAIError(err instanceof Error ? err.message : 'Failed to import Codex login')
+    } finally {
+      setIsImportingCodexAuth(false)
+    }
+  }, [])
+
+  const handleDeleteOpenAIOAuth = useCallback(async () => {
+    if (!window.electronAPI) return
+    try {
+      await window.electronAPI.deleteOpenAIOAuth()
+      setHasOpenAIOAuth(false)
+    } catch (err) {
+      console.error('Failed to delete OpenAI OAuth token:', err)
+    }
+  }, [])
+
   return (
     <div className="h-full flex flex-col">
       <PanelHeader title="App Settings" actions={<HeaderMenu route={routes.view.settings('app')} helpFeature="app-settings" />} />
       <div className="flex-1 min-h-0 mask-fade-y">
         <ScrollArea className="h-full">
           <div className="px-5 py-7 max-w-3xl mx-auto">
-          <div className="space-y-6">
-            {/* Appearance */}
-            <SettingsSection title="Appearance">
-              <SettingsCard>
-                <SettingsRow label="Mode">
-                  <SettingsSegmentedControl
-                    value={mode}
-                    onValueChange={setMode}
-                    options={[
-                      { value: 'system', label: 'System', icon: <Monitor className="w-4 h-4" /> },
-                      { value: 'light', label: 'Light', icon: <Sun className="w-4 h-4" /> },
-                      { value: 'dark', label: 'Dark', icon: <Moon className="w-4 h-4" /> },
-                    ]}
-                  />
-                </SettingsRow>
-                <SettingsRow label="Color theme">
-                  <SettingsMenuSelect
-                    value={colorTheme}
-                    onValueChange={setColorTheme}
-                    options={[
-                      { value: 'default', label: 'Default' },
-                      ...presetThemes
-                        .filter(t => t.id !== 'default')
-                        .map(t => ({
-                          value: t.id,
-                          label: t.theme.name || t.id,
-                        })),
-                    ]}
-                  />
-                </SettingsRow>
-                <SettingsRow label="Font">
-                  <SettingsSegmentedControl
-                    value={font}
-                    onValueChange={setFont}
-                    options={[
-                      { value: 'inter', label: 'Inter' },
-                      { value: 'system', label: 'System' },
-                    ]}
-                  />
-                </SettingsRow>
-              </SettingsCard>
-            </SettingsSection>
-
-            {/* Notifications */}
-            <SettingsSection title="Notifications">
-              <SettingsCard>
-                <SettingsToggle
-                  label="Desktop notifications"
-                  description="Get notified when AI finishes working in a chat."
-                  checked={notificationsEnabled}
-                  onCheckedChange={handleNotificationsEnabledChange}
-                />
-              </SettingsCard>
-            </SettingsSection>
-
-            {/* Billing */}
-            <SettingsSection title="Billing" description="Choose how you pay for AI usage">
-              <SettingsCard>
-                <SettingsMenuSelectRow
-                  label="Payment method"
-                  description={
-                    authType === 'api_key' && hasCredential
-                      ? 'API key configured'
-                      : authType === 'oauth_token' && hasCredential
-                        ? 'Claude connected'
-                        : 'Select a method'
-                  }
-                  value={authType}
-                  onValueChange={(v) => handleMethodClick(v as AuthType)}
-                  options={[
-                    { value: 'oauth_token', label: 'Claude Pro/Max', description: 'Use your Pro or Max subscription' },
-                    { value: 'api_key', label: 'API Key', description: 'Pay-as-you-go with your Anthropic key' },
-                  ]}
-                />
-              </SettingsCard>
-
-              {/* API Key Dialog */}
-              <Dialog open={expandedMethod === 'api_key'} onOpenChange={(open) => !open && handleCancel()}>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>API Key</DialogTitle>
-                    <DialogDescription>
-                      Configure your Anthropic API key
-                    </DialogDescription>
-                  </DialogHeader>
-                  <ApiKeyDialogContent
-                    value={apiKeyValue}
-                    onChange={setApiKeyValue}
-                    onSave={handleSaveApiKey}
-                    onCancel={handleCancel}
-                    isSaving={isSavingApiKey}
-                    hasExistingKey={authType === 'api_key' && hasCredential}
-                    error={apiKeyError}
-                  />
-                </DialogContent>
-              </Dialog>
-
-              {/* Claude OAuth Dialog */}
-              <Dialog open={expandedMethod === 'oauth_token'} onOpenChange={(open) => !open && handleCancelOAuth()}>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Claude Max</DialogTitle>
-                    <DialogDescription>
-                      Connect your Claude subscription
-                    </DialogDescription>
-                  </DialogHeader>
-                  {isWaitingForCode ? (
-                    <ClaudeOAuthDialogContent
-                      existingToken={existingClaudeToken}
-                      isLoading={claudeOAuthStatus === 'loading'}
-                      onUseExisting={handleUseExistingClaudeToken}
-                      onStartOAuth={handleStartClaudeOAuth}
-                      onCancel={handleCancelOAuth}
-                      status={claudeOAuthStatus}
-                      errorMessage={claudeOAuthError}
-                      isWaitingForCode={true}
-                      authCode={authCode}
-                      onAuthCodeChange={setAuthCode}
-                      onSubmitAuthCode={handleSubmitAuthCode}
+            <div className="space-y-6">
+              {/* Appearance */}
+              <SettingsSection title="Appearance">
+                <SettingsCard>
+                  <SettingsRow label="Mode">
+                    <SettingsSegmentedControl
+                      value={mode}
+                      onValueChange={setMode}
+                      options={[
+                        { value: 'system', label: 'System', icon: <Monitor className="w-4 h-4" /> },
+                        { value: 'light', label: 'Light', icon: <Sun className="w-4 h-4" /> },
+                        { value: 'dark', label: 'Dark', icon: <Moon className="w-4 h-4" /> },
+                      ]}
                     />
+                  </SettingsRow>
+                  <SettingsRow label="Color theme">
+                    <SettingsMenuSelect
+                      value={colorTheme}
+                      onValueChange={setColorTheme}
+                      options={[
+                        { value: 'default', label: 'Default' },
+                        ...presetThemes
+                          .filter(t => t.id !== 'default')
+                          .map(t => ({
+                            value: t.id,
+                            label: t.theme.name || t.id,
+                          })),
+                      ]}
+                    />
+                  </SettingsRow>
+                  <SettingsRow label="Font">
+                    <SettingsSegmentedControl
+                      value={font}
+                      onValueChange={setFont}
+                      options={[
+                        { value: 'inter', label: 'Inter' },
+                        { value: 'system', label: 'System' },
+                      ]}
+                    />
+                  </SettingsRow>
+                </SettingsCard>
+              </SettingsSection>
+
+              {/* Notifications */}
+              <SettingsSection title="Notifications">
+                <SettingsCard>
+                  <SettingsToggle
+                    label="Desktop notifications"
+                    description="Get notified when AI finishes working in a chat."
+                    checked={notificationsEnabled}
+                    onCheckedChange={handleNotificationsEnabledChange}
+                  />
+                </SettingsCard>
+              </SettingsSection>
+
+              {/* Billing */}
+              <SettingsSection title="Billing" description="Choose how you pay for AI usage">
+                <SettingsCard>
+                  <SettingsMenuSelectRow
+                    label="Claude payment method"
+                    description={
+                      authType === 'api_key' && hasCredential
+                        ? 'API key configured'
+                        : authType === 'oauth_token' && hasCredential
+                          ? 'Claude connected'
+                          : 'Select a method'
+                    }
+                    value={authType}
+                    onValueChange={(v) => handleMethodClick(v as AuthType)}
+                    options={[
+                      { value: 'oauth_token', label: 'Claude Pro/Max', description: 'Use your Pro or Max subscription' },
+                      { value: 'api_key', label: 'API Key', description: 'Pay-as-you-go with your Anthropic key' },
+                    ]}
+                  />
+                </SettingsCard>
+
+                {/* API Key Dialog */}
+                <Dialog open={expandedMethod === 'api_key'} onOpenChange={(open) => !open && handleCancel()}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>API Key</DialogTitle>
+                      <DialogDescription>
+                        Configure your Anthropic API key
+                      </DialogDescription>
+                    </DialogHeader>
+                    <ApiKeyDialogContent
+                      value={apiKeyValue}
+                      onChange={setApiKeyValue}
+                      onSave={handleSaveApiKey}
+                      onCancel={handleCancel}
+                      isSaving={isSavingApiKey}
+                      hasExistingKey={authType === 'api_key' && hasCredential}
+                      error={apiKeyError}
+                    />
+                  </DialogContent>
+                </Dialog>
+
+                {/* Claude OAuth Dialog */}
+                <Dialog open={expandedMethod === 'oauth_token'} onOpenChange={(open) => !open && handleCancelOAuth()}>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Claude Max</DialogTitle>
+                      <DialogDescription>
+                        Connect your Claude subscription
+                      </DialogDescription>
+                    </DialogHeader>
+                    {isWaitingForCode ? (
+                      <ClaudeOAuthDialogContent
+                        existingToken={existingClaudeToken}
+                        isLoading={claudeOAuthStatus === 'loading'}
+                        onUseExisting={handleUseExistingClaudeToken}
+                        onStartOAuth={handleStartClaudeOAuth}
+                        onCancel={handleCancelOAuth}
+                        status={claudeOAuthStatus}
+                        errorMessage={claudeOAuthError}
+                        isWaitingForCode={true}
+                        authCode={authCode}
+                        onAuthCodeChange={setAuthCode}
+                        onSubmitAuthCode={handleSubmitAuthCode}
+                      />
+                    ) : (
+                      <ClaudeOAuthDialogContent
+                        existingToken={existingClaudeToken}
+                        isLoading={claudeOAuthStatus === 'loading'}
+                        onUseExisting={handleUseExistingClaudeToken}
+                        onStartOAuth={handleStartClaudeOAuth}
+                        onCancel={handleCancelOAuth}
+                        status={claudeOAuthStatus}
+                        errorMessage={claudeOAuthError}
+                        isWaitingForCode={false}
+                      />
+                    )}
+                  </DialogContent>
+                </Dialog>
+
+                {/* OpenRouter API Key - for Chat mode */}
+                <SettingsCard>
+                  {isEditingOpenRouter ? (
+                    <div className="space-y-4 p-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="openrouter-key">OpenRouter API Key</Label>
+                        <p className="text-sm text-muted-foreground">
+                          For Chat mode with various AI models.{' '}
+                          <a
+                            href="https://openrouter.ai/keys"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-foreground hover:underline inline-flex items-center gap-0.5"
+                            onClick={(e) => {
+                              e.preventDefault()
+                              window.electronAPI?.openUrl('https://openrouter.ai/keys')
+                            }}
+                          >
+                            Get one from OpenRouter
+                            <ExternalLink className="size-3" />
+                          </a>
+                        </p>
+                        <div className="relative">
+                          <Input
+                            id="openrouter-key"
+                            type={showOpenRouterValue ? 'text' : 'password'}
+                            value={openRouterApiKey}
+                            onChange={(e) => setOpenRouterApiKey(e.target.value)}
+                            placeholder={hasOpenRouterKey ? '••••••••••••••••' : 'sk-or-...'}
+                            className={cn("pr-10", openRouterError && "border-destructive")}
+                            disabled={isSavingOpenRouter}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowOpenRouterValue(!showOpenRouterValue)}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            tabIndex={-1}
+                          >
+                            {showOpenRouterValue ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                          </button>
+                        </div>
+                        {openRouterError && (
+                          <p className="text-xs text-destructive">{openRouterError}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          onClick={handleSaveOpenRouter}
+                          disabled={!openRouterApiKey.trim() || isSavingOpenRouter}
+                        >
+                          {isSavingOpenRouter ? (
+                            <>
+                              <Spinner className="mr-1.5" />
+                              Saving...
+                            </>
+                          ) : (
+                            <>
+                              <Check className="size-3 mr-1.5" />
+                              {hasOpenRouterKey ? 'Update Key' : 'Save'}
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={handleCancelOpenRouter}
+                          disabled={isSavingOpenRouter}
+                        >
+                          Cancel
+                        </Button>
+                        {hasOpenRouterKey && (
+                          <Button
+                            variant="ghost"
+                            onClick={handleDeleteOpenRouter}
+                            disabled={isSavingOpenRouter}
+                            className="text-destructive hover:text-destructive ml-auto"
+                          >
+                            Remove Key
+                          </Button>
+                        )}
+                      </div>
+                    </div>
                   ) : (
-                    <ClaudeOAuthDialogContent
-                      existingToken={existingClaudeToken}
-                      isLoading={claudeOAuthStatus === 'loading'}
-                      onUseExisting={handleUseExistingClaudeToken}
-                      onStartOAuth={handleStartClaudeOAuth}
-                      onCancel={handleCancelOAuth}
-                      status={claudeOAuthStatus}
-                      errorMessage={claudeOAuthError}
-                      isWaitingForCode={false}
-                    />
+                    <SettingsRow
+                      label="OpenRouter API Key"
+                      description={hasOpenRouterKey ? 'API key configured for Chat mode' : 'Not configured'}
+                    >
+                      {isLoadingOpenRouter ? (
+                        <Spinner />
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setIsEditingOpenRouter(true)}
+                        >
+                          {hasOpenRouterKey ? 'Update' : 'Configure'}
+                        </Button>
+                      )}
+                    </SettingsRow>
                   )}
-                </DialogContent>
-              </Dialog>
-            </SettingsSection>
+                </SettingsCard>
 
-            {/* About */}
-            <SettingsSection title="About">
-              <SettingsCard>
-                <SettingsRow label="Version">
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground">
-                      {updateChecker.updateInfo?.currentVersion ?? 'Loading...'}
-                    </span>
-                    {updateChecker.updateAvailable && updateChecker.updateInfo?.latestVersion && (
+                {/* OpenAI API Key - for Chat mode (direct) */}
+                <SettingsCard>
+                  {isEditingOpenAI ? (
+                    <div className="space-y-4 p-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="openai-key">OpenAI (Direct)</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Import your existing Codex CLI login from <code>~/.codex/auth.json</code>.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleImportCodexAuth}
+                            disabled={isImportingCodexAuth}
+                          >
+                            {isImportingCodexAuth ? (
+                              <>
+                                <Spinner className="mr-1.5" />
+                                Importing...
+                              </>
+                            ) : (
+                              'Import from Codex login'
+                            )}
+                          </Button>
+                          {hasOpenAIOAuth && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleDeleteOpenAIOAuth}
+                              disabled={isImportingCodexAuth}
+                              className="text-destructive hover:text-destructive"
+                            >
+                              Remove login
+                            </Button>
+                          )}
+                        </div>
+                        {openAIError && (
+                          <p className="text-xs text-destructive">{openAIError}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          onClick={handleCancelOpenAI}
+                          disabled={isImportingCodexAuth}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <SettingsRow
+                      label="OpenAI (Direct)"
+                      description={
+                        hasOpenAIOAuth
+                            ? 'Codex login imported for direct GPT models'
+                            : 'Not configured'
+                      }
+                    >
+                      {isLoadingOpenAI ? (
+                        <Spinner />
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setIsEditingOpenAI(true)}
+                          >
+                            {hasOpenAIOAuth ? 'Update' : 'Configure'}
+                          </Button>
+                          {hasOpenAIOAuth && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleDeleteOpenAIOAuth}
+                              className="text-destructive hover:text-destructive"
+                            >
+                              Remove login
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </SettingsRow>
+                  )}
+                </SettingsCard>
+              </SettingsSection>
+
+              {/* About */}
+              <SettingsSection title="About">
+                <SettingsCard>
+                  <SettingsRow label="Version">
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">
+                        {updateChecker.updateInfo?.currentVersion ?? 'Loading...'}
+                      </span>
+                      {updateChecker.updateAvailable && updateChecker.updateInfo?.latestVersion && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={updateChecker.installUpdate}
+                        >
+                          Update to {updateChecker.updateInfo.latestVersion}
+                        </Button>
+                      )}
+                    </div>
+                  </SettingsRow>
+                  <SettingsRow label="Check for updates">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCheckForUpdates}
+                      disabled={isCheckingForUpdates}
+                    >
+                      {isCheckingForUpdates ? (
+                        <>
+                          <Spinner className="mr-1.5" />
+                          Checking...
+                        </>
+                      ) : (
+                        'Check Now'
+                      )}
+                    </Button>
+                  </SettingsRow>
+                  {updateChecker.isReadyToInstall && (
+                    <SettingsRow label="Install update">
                       <Button
-                        variant="outline"
                         size="sm"
                         onClick={updateChecker.installUpdate}
                       >
-                        Update to {updateChecker.updateInfo.latestVersion}
+                        Restart to Update
                       </Button>
-                    )}
-                  </div>
-                </SettingsRow>
-                <SettingsRow label="Check for updates">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCheckForUpdates}
-                    disabled={isCheckingForUpdates}
-                  >
-                    {isCheckingForUpdates ? (
-                      <>
-                        <Spinner className="mr-1.5" />
-                        Checking...
-                      </>
-                    ) : (
-                      'Check Now'
-                    )}
-                  </Button>
-                </SettingsRow>
-                {updateChecker.isReadyToInstall && (
-                  <SettingsRow label="Install update">
-                    <Button
-                      size="sm"
-                      onClick={updateChecker.installUpdate}
-                    >
-                      Restart to Update
-                    </Button>
-                  </SettingsRow>
-                )}
-              </SettingsCard>
-            </SettingsSection>
+                    </SettingsRow>
+                  )}
+                </SettingsCard>
+              </SettingsSection>
+            </div>
           </div>
-        </div>
         </ScrollArea>
       </div>
     </div>
