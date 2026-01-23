@@ -13,7 +13,7 @@ import type { AppShellContextType } from '@/context/AppShellContext'
 import { OnboardingWizard, ReauthScreen } from '@/components/onboarding'
 import { ResetConfirmationDialog } from '@/components/ResetConfirmationDialog'
 import { SplashScreen } from '@/components/SplashScreen'
-import { TooltipProvider } from '@/components/ui/tooltip'
+import { TooltipProvider } from '@craft-agent/ui'
 import { FocusProvider } from '@/context/FocusContext'
 import { ModalProvider } from '@/context/ModalContext'
 import { useGlobalShortcuts } from '@/hooks/keyboard'
@@ -169,6 +169,9 @@ export default function App() {
   // Window's workspace ID - fixed for this window (multi-window architecture)
   const [windowWorkspaceId, setWindowWorkspaceId] = useState<string | null>(null)
   const [currentModel, setCurrentModel] = useState(DEFAULT_MODEL)
+  // Custom model override from API connection settings (OpenRouter, Ollama, etc.)
+  // When set, the Anthropic model selector is hidden and this model is shown instead.
+  const [customModel, setCustomModel] = useState<string | null>(null)
   const [menuNewChatTrigger, setMenuNewChatTrigger] = useState(0)
   // Permission requests per session (queue to handle multiple concurrent requests)
   const [pendingPermissions, setPendingPermissions] = useState<Map<string, PermissionRequest[]>>(new Map())
@@ -234,6 +237,13 @@ export default function App() {
 
   const DRAFT_SAVE_DEBOUNCE_MS = 500
 
+  // Re-fetch custom model from API setup config (called after API connection changes).
+  // Defined early so it can be passed to useOnboarding's onConfigSaved.
+  const refreshCustomModel = useCallback(async () => {
+    const billing = await window.electronAPI.getApiSetup()
+    setCustomModel(billing.customModel || null)
+  }, [])
+
   // Handle onboarding completion
   const handleOnboardingComplete = useCallback(async () => {
     // Reload workspaces after onboarding
@@ -251,9 +261,11 @@ export default function App() {
     setAppState('ready')
   }, [])
 
-  // Onboarding hook
+  // Onboarding hook — onConfigSaved fires immediately when billing is saved,
+  // ensuring customModel context updates before the wizard closes.
   const onboarding = useOnboarding({
     onComplete: handleOnboardingComplete,
+    onConfigSaved: refreshCustomModel,
     initialSetupNeeds: setupNeeds || undefined,
   })
 
@@ -368,6 +380,10 @@ export default function App() {
       if (storedModel) {
         setCurrentModel(storedModel)
       }
+    })
+    // Load custom model override from API connection settings
+    window.electronAPI.getApiSetup().then((billing) => {
+      setCustomModel(billing.customModel || null)
     })
     // Load persisted input drafts into ref (no re-render needed)
     window.electronAPI.getAllDrafts().then((drafts) => {
@@ -642,19 +658,36 @@ export default function App() {
     window.electronAPI.sessionCommand(sessionId, { type: 'unflag' })
   }, [updateSessionById])
 
+  /**
+   * Set which session user is actively viewing (for unread state machine).
+   * Called when user navigates to a session. Main process uses this to determine
+   * whether to mark new assistant messages as unread.
+   */
+  const handleSetActiveViewingSession = useCallback((sessionId: string) => {
+    // Optimistic UI update: clear hasUnread immediately
+    updateSessionById(sessionId, { hasUnread: false })
+    // Tell main process user is viewing this session
+    window.electronAPI.sessionCommand(sessionId, { type: 'setActiveViewing', workspaceId: windowWorkspaceId ?? '' })
+  }, [updateSessionById, windowWorkspaceId])
+
   const handleMarkSessionRead = useCallback((sessionId: string) => {
-    // Find the session and compute the last final assistant message ID
+    // Update hasUnread flag (primary source of truth for NEW badge)
+    // Also update lastReadMessageId for backwards compatibility
     updateSessionById(sessionId, (s) => {
       const lastFinalId = s.messages.findLast(
         m => m.role === 'assistant' && !m.isIntermediate
       )?.id
-      return lastFinalId ? { lastReadMessageId: lastFinalId } : {}
+      return {
+        hasUnread: false,
+        ...(lastFinalId ? { lastReadMessageId: lastFinalId } : {}),
+      }
     })
     window.electronAPI.sessionCommand(sessionId, { type: 'markRead' })
   }, [updateSessionById])
 
   const handleMarkSessionUnread = useCallback((sessionId: string) => {
-    updateSessionById(sessionId, { lastReadMessageId: undefined })
+    // Set hasUnread flag (primary source of truth for NEW badge)
+    updateSessionById(sessionId, { hasUnread: true, lastReadMessageId: undefined })
     window.electronAPI.sessionCommand(sessionId, { type: 'markUnread' })
   }, [updateSessionById])
 
@@ -1108,6 +1141,7 @@ export default function App() {
     workspaces,
     activeWorkspaceId: windowWorkspaceId,
     currentModel,
+    customModel,
     pendingPermissions,
     pendingCredentials,
     getDraft,
@@ -1120,6 +1154,7 @@ export default function App() {
     onUnflagSession: handleUnflagSession,
     onMarkSessionRead: handleMarkSessionRead,
     onMarkSessionUnread: handleMarkSessionUnread,
+    onSetActiveViewingSession: handleSetActiveViewingSession,
     onTodoStateChange: handleTodoStateChange,
     onDeleteSession: handleDeleteSession,
     onRespondToPermission: handleRespondToPermission,
@@ -1129,6 +1164,7 @@ export default function App() {
     onOpenUrl: handleOpenUrl,
     // Model
     onModelChange: handleModelChange,
+    refreshCustomModel,
     // Workspace
     onSelectWorkspace: handleSelectWorkspace,
     onRefreshWorkspaces: handleRefreshWorkspaces,
@@ -1147,6 +1183,7 @@ export default function App() {
     workspaces,
     windowWorkspaceId,
     currentModel,
+    customModel,
     pendingPermissions,
     pendingCredentials,
     getDraft,
@@ -1158,6 +1195,7 @@ export default function App() {
     handleUnflagSession,
     handleMarkSessionRead,
     handleMarkSessionUnread,
+    handleSetActiveViewingSession,
     handleTodoStateChange,
     handleDeleteSession,
     handleRespondToPermission,
@@ -1165,6 +1203,7 @@ export default function App() {
     handleOpenFile,
     handleOpenUrl,
     handleModelChange,
+    refreshCustomModel,
     handleSelectWorkspace,
     handleRefreshWorkspaces,
     handleOpenSettings,
@@ -1223,7 +1262,7 @@ export default function App() {
           state={onboarding.state}
           onContinue={onboarding.handleContinue}
           onBack={onboarding.handleBack}
-          onSelectBillingMethod={onboarding.handleSelectBillingMethod}
+          onSelectApiSetupMethod={onboarding.handleSelectApiSetupMethod}
           onSubmitCredential={onboarding.handleSubmitCredential}
           onStartOAuth={onboarding.handleStartOAuth}
           onFinish={onboarding.handleFinish}
@@ -1233,10 +1272,6 @@ export default function App() {
           isWaitingForCode={onboarding.isWaitingForCode}
           onSubmitAuthCode={onboarding.handleSubmitAuthCode}
           onCancelOAuth={onboarding.handleCancelOAuth}
-          baseUrl={onboarding.baseUrl}
-          onBaseUrlChange={onboarding.setBaseUrl}
-          customModelNames={onboarding.customModelNames}
-          onCustomModelNamesChange={onboarding.setCustomModelNames}
         />
       </ModalProvider>
     )

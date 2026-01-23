@@ -36,6 +36,8 @@ export interface AppShellContextType {
   workspaces: Workspace[]
   activeWorkspaceId: string | null
   currentModel: string
+  /** When set, a custom model overrides the Anthropic model selector (e.g. OpenRouter) */
+  customModel: string | null
   pendingPermissions: Map<string, PermissionRequest[]>
   pendingCredentials: Map<string, CredentialRequest[]>
   /** Get draft input text for a session - reads from ref without triggering re-renders */
@@ -61,6 +63,8 @@ export interface AppShellContextType {
   onUnflagSession: (sessionId: string) => void
   onMarkSessionRead: (sessionId: string) => void
   onMarkSessionUnread: (sessionId: string) => void
+  /** Track which session user is viewing (for unread state machine) */
+  onSetActiveViewingSession: (sessionId: string) => void
   onTodoStateChange: (sessionId: string, state: TodoState) => void
   onDeleteSession: (sessionId: string, skipConfirmation?: boolean) => Promise<boolean>
 
@@ -85,6 +89,8 @@ export interface AppShellContextType {
 
   // Model
   onModelChange: (model: string) => void
+  /** Re-fetch custom model from billing config (call after API connection changes) */
+  refreshCustomModel: () => Promise<void>
 
   // Workspace
   onSelectWorkspace: (id: string, openInNewWindow?: boolean) => void
@@ -125,6 +131,11 @@ export function AppShellProvider({
   value: AppShellContextType
 }) {
   return <AppShellContext.Provider value={value}>{children}</AppShellContext.Provider>
+}
+
+/** Returns context or null if outside provider (safe for optional consumers like playground) */
+export function useOptionalAppShellContext(): AppShellContextType | null {
+  return useContext(AppShellContext)
 }
 
 export function useAppShellContext(): AppShellContextType {

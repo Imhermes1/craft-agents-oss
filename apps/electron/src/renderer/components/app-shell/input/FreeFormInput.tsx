@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/mention-menu'
 import { parseMentions } from '@/lib/mentions'
 import { RichTextInput, type RichTextInputHandle } from '@/components/ui/rich-text-input'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@craft-agent/ui'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -47,7 +47,8 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { cn } from '@/lib/utils'
 import { applySmartTypography } from '@/lib/smart-typography'
 import { AttachmentPreview } from '../AttachmentPreview'
-import { MODELS, getModelShortName } from '@config/models'
+import { MODELS, getModelShortName, isClaudeModel } from '@config/models'
+import { useOptionalAppShellContext } from '@/context/AppShellContext'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { FreeFormInputContextBadge } from './FreeFormInputContextBadge'
 import type { FileAttachment, LoadedSource, LoadedSkill } from '../../../../shared/types'
@@ -198,6 +199,10 @@ export function FreeFormInput({
   isEmptySession = false,
   contextStatus,
 }: FreeFormInputProps) {
+  // Read custom model from context — when set, overrides the Anthropic model selector.
+  // Uses optional variant so playground (no provider) doesn't crash.
+  const customModel = useOptionalAppShellContext()?.customModel ?? null
+
   // Performance optimization: Always use internal state for typing to avoid parent re-renders
   // Sync FROM parent on mount/change (for restoring drafts)
   // Sync TO parent on blur/submit (debounced persistence)
@@ -566,11 +571,13 @@ export function FreeFormInput({
   }, [optimisticSourceSlugs, onSourcesChange])
 
   // Inline mention hook (for skills and sources only)
+  // Pass workspaceId so skills are inserted with fully-qualified names
   const inlineMention = useInlineMention({
     inputRef: richInputRef,
     skills,
     sources,
     onSelect: handleMentionSelect,
+    workspaceId,
   })
 
   // NOTE: Mentions are now rendered inline in RichTextInput, no separate badge row needed
@@ -1254,71 +1261,89 @@ export function FreeFormInput({
                       modelDropdownOpen && "bg-foreground/5"
                     )}
                   >
-                    {getModelShortName(currentModel)}
-                    <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
+                    {/* Show custom model name when a custom API connection is active */}
+                    {getModelShortName(customModel || currentModel)}
+                    {!customModel && <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />}
                   </button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="top">Model</TooltipContent>
             </Tooltip>
             <StyledDropdownMenuContent side="top" align="end" sideOffset={8} className="min-w-[240px]">
-              {/* Model options */}
-              {MODELS.map((model) => {
-                const isSelected = currentModel === model.id
-                const descriptions: Record<string, string> = {
-                  'claude-opus-4-5-20251101': 'Most capable for complex work',
-                  'claude-sonnet-4-5-20250929': 'Best for everyday tasks',
-                  'claude-haiku-4-5-20251001': 'Fastest for quick answers',
-                }
-                return (
-                  <StyledDropdownMenuItem
-                    key={model.id}
-                    onSelect={() => onModelChange(model.id)}
-                    className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
-                  >
-                    <div className="text-left">
-                      <div className="font-medium text-sm">{model.name}</div>
-                      <div className="text-xs text-muted-foreground">{descriptions[model.id] || model.description}</div>
-                    </div>
-                    {isSelected && (
-                      <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
-                    )}
-                  </StyledDropdownMenuItem>
-                )
-              })}
-
-              {/* Separator before thinking level */}
-              <StyledDropdownMenuSeparator className="my-1" />
-
-              {/* Thinking Level - Radix submenu with automatic edge detection */}
-              <DropdownMenuSub>
-                <StyledDropdownMenuSubTrigger className="flex items-center justify-between px-2 py-2 rounded-lg">
-                  <div className="text-left flex-1">
-                    <div className="font-medium text-sm">{getThinkingLevelName(thinkingLevel)}</div>
-                    <div className="text-xs text-muted-foreground">Extended reasoning depth</div>
+              {/* When custom model is active, show it as a static item instead of Anthropic options */}
+              {customModel ? (
+                <StyledDropdownMenuItem
+                  disabled
+                  className="flex items-center justify-between px-2 py-2 rounded-lg"
+                >
+                  <div className="text-left">
+                    <div className="font-medium text-sm">{customModel}</div>
+                    <div className="text-xs text-muted-foreground">Custom API connection</div>
                   </div>
-                </StyledDropdownMenuSubTrigger>
-                <StyledDropdownMenuSubContent className="min-w-[220px]">
-                  {THINKING_LEVELS.map(({ id, name, description }) => {
-                    const isSelected = thinkingLevel === id
-                    return (
-                      <StyledDropdownMenuItem
-                        key={id}
-                        onSelect={() => onThinkingLevelChange?.(id)}
-                        className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
-                      >
-                        <div className="text-left">
-                          <div className="font-medium text-sm">{name}</div>
-                          <div className="text-xs text-muted-foreground">{description}</div>
-                        </div>
-                        {isSelected && (
-                          <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
-                        )}
-                      </StyledDropdownMenuItem>
-                    )
-                  })}
-                </StyledDropdownMenuSubContent>
-              </DropdownMenuSub>
+                  <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
+                </StyledDropdownMenuItem>
+              ) : (
+                /* Standard Anthropic model options */
+                MODELS.map((model) => {
+                  const isSelected = currentModel === model.id
+                  const descriptions: Record<string, string> = {
+                    'claude-opus-4-5-20251101': 'Most capable for complex work',
+                    'claude-sonnet-4-5-20250929': 'Best for everyday tasks',
+                    'claude-haiku-4-5-20251001': 'Fastest for quick answers',
+                  }
+                  return (
+                    <StyledDropdownMenuItem
+                      key={model.id}
+                      onSelect={() => onModelChange(model.id)}
+                      className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
+                    >
+                      <div className="text-left">
+                        <div className="font-medium text-sm">{model.name}</div>
+                        <div className="text-xs text-muted-foreground">{descriptions[model.id] || model.description}</div>
+                      </div>
+                      {isSelected && (
+                        <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
+                      )}
+                    </StyledDropdownMenuItem>
+                  )
+                })
+              )}
+
+              {/* Thinking level selector — only shown for Claude models (extended thinking is Claude-specific) */}
+              {(!customModel || isClaudeModel(customModel)) && (
+                <>
+                  <StyledDropdownMenuSeparator className="my-1" />
+
+                  <DropdownMenuSub>
+                    <StyledDropdownMenuSubTrigger className="flex items-center justify-between px-2 py-2 rounded-lg">
+                      <div className="text-left flex-1">
+                        <div className="font-medium text-sm">{getThinkingLevelName(thinkingLevel)}</div>
+                        <div className="text-xs text-muted-foreground">Extended reasoning depth</div>
+                      </div>
+                    </StyledDropdownMenuSubTrigger>
+                    <StyledDropdownMenuSubContent className="min-w-[220px]">
+                      {THINKING_LEVELS.map(({ id, name, description }) => {
+                        const isSelected = thinkingLevel === id
+                        return (
+                          <StyledDropdownMenuItem
+                            key={id}
+                            onSelect={() => onThinkingLevelChange?.(id)}
+                            className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
+                          >
+                            <div className="text-left">
+                              <div className="font-medium text-sm">{name}</div>
+                              <div className="text-xs text-muted-foreground">{description}</div>
+                            </div>
+                            {isSelected && (
+                              <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
+                            )}
+                          </StyledDropdownMenuItem>
+                        )
+                      })}
+                    </StyledDropdownMenuSubContent>
+                  </DropdownMenuSub>
+                </>
+              )}
 
               {/* Context usage footer - only show when we have token data */}
               {contextStatus?.inputTokens != null && contextStatus.inputTokens > 0 && (

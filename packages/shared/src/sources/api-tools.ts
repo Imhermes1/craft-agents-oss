@@ -113,9 +113,10 @@ function buildUrl(
   auth: ApiConfig['auth'],
   credential: ApiCredential
 ): string {
-  // Ensure path starts with /
+  // Normalize: remove trailing slash from baseUrl and ensure path starts with /
+  const normalizedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  let url = `${baseUrl}${normalizedPath}`;
+  let url = `${normalizedBase}${normalizedPath}`;
 
   // Handle query param auth (only for string credentials)
   const apiKey = typeof credential === 'string' ? credential : '';

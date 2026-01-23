@@ -52,11 +52,25 @@ export function getModelDisplayName(modelId: string): string {
 export function getModelShortName(modelId: string): string {
   const model = MODELS.find(m => m.id === modelId);
   if (model) return model.shortName;
-  // Fallback: strip prefix and date suffix
+  // For provider-prefixed IDs (e.g. "openai/gpt-5"), show just the model part
+  if (modelId.includes('/')) {
+    return modelId.split('/').pop() || modelId;
+  }
+  // Fallback: strip claude- prefix and date suffix
   return modelId.replace('claude-', '').replace(/-[\d.-]+$/, '');
 }
 
 /** Check if model is an Opus model (for cache TTL decisions) */
 export function isOpusModel(modelId: string): boolean {
   return modelId.includes('opus');
+}
+
+/**
+ * Check if a model ID refers to a Claude model.
+ * Handles both direct Anthropic IDs (e.g. "claude-sonnet-4-5-20250929")
+ * and provider-prefixed IDs (e.g. "anthropic/claude-sonnet-4" via OpenRouter).
+ */
+export function isClaudeModel(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return lower.startsWith('claude-') || lower.includes('/claude');
 }

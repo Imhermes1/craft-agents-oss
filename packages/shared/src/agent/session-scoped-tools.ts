@@ -19,8 +19,8 @@
 
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { existsSync, readFileSync } from 'fs';
-import { basename } from 'path';
+import { existsSync, readFileSync, statSync } from 'fs';
+import { basename, join } from 'path';
 import { getSessionPlansPath } from '../sessions/storage.ts';
 import { debug } from '../utils/debug.ts';
 import { getCredentialManager } from '../credentials/index.ts';
@@ -582,18 +582,17 @@ async function testApiSource(
     // Get credentials if needed
     if (requiresAuth) {
       const workspaceId = basename(workspaceRootPath);
+      const sourceCredManager = getSourceCredentialManager();
+      const loadedSource: LoadedSource = {
+        config: source,
+        guide: null,
+        folderPath: '',
+        workspaceRootPath,
+        workspaceId,
+      };
 
       if (isApiOAuthProvider(source.provider)) {
         // Use SourceCredentialManager for OAuth providers - handles expiry checking and refresh
-        const sourceCredManager = getSourceCredentialManager();
-        const loadedSource: LoadedSource = {
-          config: source,
-          guide: null,
-          folderPath: '',
-          workspaceRootPath,
-          workspaceId,
-        };
-
         // getToken() returns null if expired
         let token = await sourceCredManager.getToken(loadedSource);
 
@@ -611,41 +610,38 @@ async function testApiSource(
           debug(`[testApiSource] No valid OAuth token for ${source.slug}`);
         }
       } else {
-        // For non-OAuth auth types, use direct credential lookup
-        const credentialManager = getCredentialManager();
+        // For non-OAuth auth types, use getApiCredential which handles basic auth JSON parsing
+        debug(`[testApiSource] Looking up credentials for source=${source.slug}, authType=${source.api.authType}`);
+        const apiCred = await sourceCredManager.getApiCredential(loadedSource);
+        if (apiCred) {
+          // Determine credential type for reporting
+          if (source.api.authType === 'bearer') {
+            credentialType = 'source_bearer';
+          } else if (source.api.authType === 'basic') {
+            credentialType = 'source_basic';
+          } else {
+            credentialType = 'source_apikey';
+          }
 
-        let credType: 'source_bearer' | 'source_apikey' | 'source_basic';
-        if (source.api.authType === 'bearer') {
-          credType = 'source_bearer';
-        } else if (source.api.authType === 'basic') {
-          credType = 'source_basic';
-        } else {
-          // 'header', 'query', or other → stored as apikey
-          credType = 'source_apikey';
-        }
-
-        debug(`[testApiSource] Looking up credentials for source=${source.slug}, authType=${source.api.authType}, credType=${credType}`);
-        const cred = await credentialManager.get({ type: credType, workspaceId, sourceId: source.slug });
-        if (cred?.value) {
-          credValue = cred.value;
-          credentialType = credType;
+          // Apply credential based on authType config
+          if (source.api.authType === 'bearer') {
+            credValue = typeof apiCred === 'string' ? apiCred : '';
+            headers['Authorization'] = buildAuthorizationHeader(source.api.authScheme, credValue);
+          } else if (source.api.authType === 'header' && source.api.headerName) {
+            credValue = typeof apiCred === 'string' ? apiCred : '';
+            headers[source.api.headerName] = credValue;
+          } else if (source.api.authType === 'basic') {
+            // getApiCredential returns BasicAuthCredential {username, password} for basic auth
+            if (typeof apiCred === 'object' && 'username' in apiCred && 'password' in apiCred) {
+              const basicAuth = Buffer.from(`${apiCred.username}:${apiCred.password}`).toString('base64');
+              headers['Authorization'] = `Basic ${basicAuth}`;
+              credValue = '[basic-auth]'; // Don't expose actual credentials in logs
+            }
+          }
           debug(`[testApiSource] Found credential for ${source.slug}`);
         } else {
           debug(`[testApiSource] No credential found for ${source.slug}`);
         }
-      }
-
-      if (credValue) {
-        // Apply credential based on authType config
-        if (source.api.authType === 'bearer' || isApiOAuthProvider(source.provider)) {
-          headers['Authorization'] = buildAuthorizationHeader(source.api.authScheme, credValue);
-        } else if (source.api.authType === 'header' && source.api.headerName) {
-          headers[source.api.headerName] = credValue;
-        } else if (source.api.authType === 'basic') {
-          // Basic auth - credValue should already be base64 encoded
-          headers['Authorization'] = `Basic ${credValue}`;
-        }
-        // Query param auth would need URL modification, skip for now
       }
     }
 
@@ -855,21 +851,57 @@ After creating or editing a source's config.json, run this tool to:
         // These help the agent understand when/how to use this source
         // ============================================================
 
-        // Check for description/tagline - helps Claude understand the source's purpose
+        // Cast to check for common misnamed fields (description vs tagline)
+        // TypeScript types don't prevent extra properties at runtime, so we cast
+        // through unknown to access potential untyped fields in the JSON
+        const rawConfig = source as unknown as Record<string, unknown>;
+
+        // Check for tagline - the description shown in the UI
         if (!source.tagline) {
-          warnings.push('**⚠ Missing Description**');
-          warnings.push('  Add a `tagline` field to describe this source\'s purpose.');
-          warnings.push('  This helps Claude understand when and how to use this source.');
-          warnings.push('  Example: `"tagline": "Issue tracking for the iOS team"`');
+          // Check if user mistakenly used 'description' instead of 'tagline'
+          if (rawConfig['description'] && typeof rawConfig['description'] === 'string') {
+            warnings.push('**⚠ Wrong Field Name: "description" → "tagline"**');
+            warnings.push(`  Found: \`"description": "${rawConfig['description']}"\``);
+            warnings.push('  The UI displays the \`tagline\` field, not \`description\`.');
+            warnings.push('  Rename the field in config.json:');
+            warnings.push(`  \`"tagline": "${rawConfig['description']}"\``);
+          } else {
+            warnings.push('**⚠ Missing Tagline**');
+            warnings.push('  Add a \`tagline\` field to describe this source\'s purpose.');
+            warnings.push('  This is displayed in the UI and helps Claude understand the source.');
+            warnings.push('  Example: \`"tagline": "Issue tracking for the iOS team"\`');
+          }
+        } else {
+          // Tagline exists - report it for visibility
+          results.push(`**✓ Tagline** "${source.tagline}"`);
         }
 
         // Check for icon (supports .svg, .png, .jpg, .jpeg)
         // Only warn if no icon was found/downloaded in the previous step
         if (!localIcon && !source.icon) {
           warnings.push('**⚠ Missing Icon**');
-          warnings.push('  Use `WebSearch` to find an icon for this service:');
-          warnings.push(`  WebSearch({ query: "${source.provider || source.name} logo icon" })`);
-          warnings.push('  Save as `icon.svg`, `icon.png`, or `icon.jpg` in the source folder.');
+          warnings.push('  No icon file found in source folder (icon.svg, icon.png, icon.jpg).');
+          warnings.push('  Options to add an icon:');
+          warnings.push('  1. Place an icon file directly in the source folder');
+          warnings.push('  2. Add \`"icon": "<url>"\` to config.json (will be auto-downloaded)');
+          warnings.push('  3. Add \`"icon": "📋"\` to use an emoji');
+          warnings.push('');
+          warnings.push('  To find an icon, use WebSearch:');
+          warnings.push(`  WebSearch({ query: "${source.provider || source.name} logo svg" })`);
+        }
+
+        // Check for guide.md - essential for Claude to understand how to use the source
+        const guidePath = join(sourcePath, 'guide.md');
+        const hasGuide = existsSync(guidePath);
+        if (!hasGuide) {
+          warnings.push('**⚠ Missing guide.md**');
+          warnings.push('  Create a guide.md file to help Claude use this source effectively.');
+          warnings.push('  Include: available endpoints, authentication details, usage examples.');
+          warnings.push(`  Path: ${sourcePath}/guide.md`);
+        } else {
+          const guideStats = statSync(guidePath);
+          const guideSizeKB = (guideStats.size / 1024).toFixed(1);
+          results.push(`**✓ Guide** (guide.md, ${guideSizeKB} KB)`);
         }
 
         // ============================================================
@@ -1092,16 +1124,18 @@ After creating or editing a source's config.json, run this tool to:
                 }
               } else if (mcpResult.errorType === 'needs-auth') {
                 source.connectionStatus = 'needs_auth';
+                source.connectionError = getValidationErrorMessage(mcpResult, { transport: source.mcp?.transport });
                 saveSourceConfig(workspaceRootPath, source);
                 results.push('**⚠ MCP Needs Authentication**');
                 results.push('Use `source_oauth_trigger` to authenticate.');
               } else {
                 hasErrors = true;
                 source.connectionStatus = 'failed';
-                source.connectionError = getValidationErrorMessage(mcpResult);
+                const errorMsg = getValidationErrorMessage(mcpResult, { transport: source.mcp?.transport });
+                source.connectionError = errorMsg;
                 saveSourceConfig(workspaceRootPath, source);
                 results.push(`**❌ MCP Connection Failed**`);
-                results.push(`  Error: ${getValidationErrorMessage(mcpResult)}`);
+                results.push(`  Error: ${errorMsg}`);
 
                 if (mcpResult.errorType === 'invalid-schema' && mcpResult.invalidProperties) {
                   results.push('  Invalid tool properties:');

@@ -6,10 +6,10 @@ import { getSystemPrompt, getDateTimeContext, getWorkingDirectoryContext } from 
 // Plan types are used by UI components; not needed in craft-agent.ts since Safe Mode is user-controlled
 import { parseError, type AgentError } from './errors.ts';
 import { runErrorDiagnostics } from './diagnostics.ts';
-import { loadStoredConfig, loadConfigDefaults, resolveModelId, type Workspace } from '../config/storage.ts';
+import { loadStoredConfig, loadConfigDefaults, getAnthropicBaseUrl, resolveModelId, type Workspace } from '../config/storage.ts';
 import { isLocalMcpEnabled } from '../workspaces/storage.ts';
 import { loadPlanFromPath, type SessionConfig as Session } from '../sessions/storage.ts';
-import { DEFAULT_MODEL } from '../config/models.ts';
+import { DEFAULT_MODEL, isClaudeModel } from '../config/models.ts';
 import { getCredentialManager } from '../credentials/index.ts';
 import { updatePreferences, loadPreferences, formatPreferencesForPrompt, type UserPreferences } from '../config/preferences.ts';
 import type { FileAttachment } from '../utils/files.ts';
@@ -40,7 +40,9 @@ import {
   SAFE_MODE_CONFIG,
 } from './mode-manager.ts';
 import { type PermissionsContext, permissionsConfigCache } from './permissions-config.ts';
-import { getSessionPlansPath, getSessionPath } from '../sessions/storage.ts';
+import { getSessionPlansPath, getSessionPath, getSessionLongResponsesPath } from '../sessions/storage.ts';
+import { writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
 import { expandPath } from '../utils/paths.ts';
 import {
   ConfigWatcher,
@@ -422,12 +424,13 @@ export class CraftAgent {
   public onSourceActivationRequest: ((sourceSlug: string) => Promise<boolean>) | null = null;
 
   constructor(config: CraftAgentConfig) {
-    // Resolve model: prioritize session model > config model > global config > DEFAULT_MODEL
-    // Then apply custom model name mappings (for third-party APIs)
-    const baseModel = config.session?.model ?? config.model ?? loadStoredConfig()?.model ?? DEFAULT_MODEL;
-    const resolvedModel = resolveModelId(baseModel);
-    this.config = { ...config, model: resolvedModel };
+    // Resolve model: prioritize session model > config model > DEFAULT_MODEL
+    const model = config.session?.model ?? config.model ?? DEFAULT_MODEL;
+    this.config = { ...config, model };
     this.isHeadless = config.isHeadless ?? false;
+
+    // Log which model is being used (helpful for debugging custom models)
+    debug(`[CraftAgent] Using model: ${model}`);
 
     // Initialize thinking level from config (defaults to 'think' from class initialization)
     if (config.thinkingLevel) {
@@ -804,11 +807,19 @@ export class CraftAgent {
       };
       
       // Configure SDK options
-      const model = this.config.model || DEFAULT_MODEL;
+      // Resolve model: use tier name when using custom API (OpenRouter), else specific version
+      const modelConfig = this.config.model || DEFAULT_MODEL;
+      const model = resolveModelId(modelConfig);
+
+      // Log provider context for diagnostics (custom base URL = third-party provider)
+      const activeBaseUrl = getAnthropicBaseUrl();
+      if (activeBaseUrl) {
+        debug(`[chat] Custom provider: baseUrl=${activeBaseUrl}, model=${model}, hasApiKey=${!!process.env.ANTHROPIC_API_KEY}`);
+      }
 
       // Determine effective thinking level: ultrathink override boosts to max for this message
       const effectiveThinkingLevel: ThinkingLevel = this.ultrathinkOverride ? 'max' : this.thinkingLevel;
-      const thinkingTokens = getThinkingTokens(effectiveThinkingLevel, model);
+      const thinkingTokens = getThinkingTokens(effectiveThinkingLevel, modelConfig);
       debug(`[chat] Thinking: level=${this.thinkingLevel}, override=${this.ultrathinkOverride}, effective=${effectiveThinkingLevel}, tokens=${thinkingTokens}`);
 
       // NOTE: Parent-child tracking for subagents is documented below (search for
@@ -816,6 +827,11 @@ export class CraftAgent {
 
       // Clear stderr buffer at start of each query
       this.lastStderrOutput = [];
+
+      // Detect if resolved model is Claude — non-Claude models (via OpenRouter/Ollama) don't
+      // support Anthropic-specific betas or extended thinking parameters
+      const isClaude = isClaudeModel(model);
+      const useAnthropicBetas = isClaude;
 
       const options: Options = {
         ...getDefaultOptions(),
@@ -832,20 +848,23 @@ export class CraftAgent {
             this.lastStderrOutput.shift();
           }
         },
-        // Beta features:
+        // Beta features (only when using direct Anthropic API, not OpenRouter/etc.)
         // - advanced-tool-use-2025-11-20: Enhanced tool use capabilities
-        betas: ['advanced-tool-use-2025-11-20'] as any,
+        ...(useAnthropicBetas ? { betas: ['advanced-tool-use-2025-11-20'] as any } : {}),
         // Extended thinking: tokens based on effective thinking level (session level + ultrathink override)
-        maxThinkingTokens: thinkingTokens,
+        // Non-Claude models don't support extended thinking, so pass 0 to disable
+        maxThinkingTokens: isClaude ? thinkingTokens : 0,
         // Option A: Append to Claude Code's system prompt (recommended by docs)
         // Use pinned values for consistency after compaction (SDK expects stable system prompt)
         systemPrompt: {
           type: 'preset',
           preset: 'claude_code',
+          // Working directory included for monorepo context file discovery
           append: getSystemPrompt(
             this.pinnedPreferencesPrompt ?? undefined,
             this.config.debugMode,
-            this.workspaceRootPath
+            this.workspaceRootPath,
+            this.config.session?.workingDirectory
           ),
         },
         // Use sdkCwd for SDK session storage - this is set once at session creation and never changes.
@@ -1010,12 +1029,12 @@ export class CraftAgent {
                           reason: `Source "${serverName}" is available but not enabled for this session. Please enable it in the sources panel.`,
                         };
                       } else {
-                        // Source doesn't exist at all
+                        // Source doesn't exist or can't be connected
                         this.onDebug?.(`BLOCKED source tool: ${input.tool_name} (source "${serverName}" does not exist)`);
                         return {
                           continue: false,
                           decision: 'block' as const,
-                          reason: `Source "${serverName}" is not available. The source may have been removed or its credentials expired.`,
+                          reason: `Source "${serverName}" could not be connected. It may need re-authentication, or the server may be unreachable. Check the source in the sidebar for details.`,
                         };
                       }
                     }
@@ -1060,6 +1079,30 @@ export class CraftAgent {
                     hookSpecificOutput: {
                       hookEventName: 'PreToolUse' as const,
                       updatedInput,
+                    },
+                  };
+                }
+              }
+
+              // ============================================================
+              // SKILL QUALIFICATION: Ensure skill names are fully-qualified (workspaceId:slug)
+              // The SDK requires fully-qualified names to resolve skills. If the agent
+              // calls a skill with just the short slug, we prefix it here.
+              // Phase 1 (UI layer) should already inject the full name in rawText, but this
+              // provides defense-in-depth for edge cases where agent calls Skill directly.
+              // ============================================================
+              if (input.tool_name === 'Skill') {
+                const toolInput = input.tool_input as { skill?: string; args?: string };
+                if (toolInput.skill && !toolInput.skill.includes(':')) {
+                  // Short name detected - prepend workspaceId
+                  const workspaceId = this.config.workspace.id;
+                  const qualifiedSkill = `${workspaceId}:${toolInput.skill}`;
+                  this.onDebug?.(`Skill tool: qualified "${toolInput.skill}" → "${qualifiedSkill}"`);
+                  return {
+                    continue: true,
+                    hookSpecificOutput: {
+                      hookEventName: 'PreToolUse' as const,
+                      updatedInput: { ...toolInput, skill: qualifiedSkill },
                     },
                   };
                 }
@@ -1387,6 +1430,38 @@ export class CraftAgent {
                 const explicitIntent = this.toolIntents.get(input.tool_use_id);
                 this.onDebug?.(`PostToolUse: Using intent for summarization: ${explicitIntent || '(none - will use tool params)'}`);
 
+                // Save full response to filesystem so agent can read specific details later if needed
+                let savedFilePath: string | undefined;
+                if (sessionId) {
+                  try {
+                    const longResponsesDir = getSessionLongResponsesPath(this.workspaceRootPath, sessionId);
+                    if (!existsSync(longResponsesDir)) {
+                      mkdirSync(longResponsesDir, { recursive: true });
+                    }
+                    // Generate filename: YYYYMMDD-HHMMSSMMM_toolname.json (includes milliseconds for uniqueness)
+                    const now = new Date();
+                    const timestamp = now.toISOString().replace(/[-:T.]/g, '').slice(0, 17);
+                    // Sanitize tool name for filename (replace special chars with underscore)
+                    const safeToolName = input.tool_name.replace(/[^a-zA-Z0-9_-]/g, '_');
+                    const filename = `${timestamp}_${safeToolName}.json`;
+                    savedFilePath = join(longResponsesDir, filename);
+
+                    // Write full response with metadata
+                    const fullResponseData = {
+                      timestamp: now.toISOString(),
+                      toolName: input.tool_name,
+                      input: input.tool_input,
+                      tokens,
+                      result: response,
+                    };
+                    writeFileSync(savedFilePath, JSON.stringify(fullResponseData, null, 2));
+                    this.onDebug?.(`PostToolUse: Full response saved to ${savedFilePath}`);
+                  } catch (saveError) {
+                    debug(`[PostToolUse] Failed to save full response: ${saveError}`);
+                    // Continue with summarization even if save fails
+                  }
+                }
+
                 try {
                   const summary = await summarizeLargeResult(responseStr, {
                     toolName: input.tool_name,
@@ -1395,12 +1470,20 @@ export class CraftAgent {
                     modelIntent: explicitIntent,
                   });
 
+                  // Build message with optional file path reference
+                  let message = `[Large result (~${tokens} tokens) was summarized to fit context.`;
+                  if (savedFilePath) {
+                    message += ` Full result saved to: ${savedFilePath}. Use Read, Grep, or Glob tools to look up specific information if needed.`;
+                  } else {
+                    message += ` If key details are missing, consider re-calling with more specific filters or pagination.`;
+                  }
+                  message += `]\n\n${summary}`;
+
                   return {
                     continue: true,
                     hookSpecificOutput: {
                       hookEventName: 'PostToolUse' as const,
-                      updatedMCPToolOutput: `[Large result (~${tokens} tokens) was summarized to fit context. ` +
-                        `If key details are missing, consider re-calling with more specific filters or pagination.]\n\n${summary}`,
+                      updatedMCPToolOutput: message,
                     },
                   };
                 } catch (error) {
@@ -1443,24 +1526,10 @@ export class CraftAgent {
         // Skip resume on retry (after session expiry) to start fresh
         ...(!_isRetry && this.sessionId ? { resume: this.sessionId } : {}),
         mcpServers,
-        // Custom permission handler for Bash commands
-        canUseTool: async (toolName, input, toolOptions) => {
-          // Debug: show what tools are being called
-          this.onDebug?.(`canUseTool: ${toolName}`);
-
-          // Bash commands require user permission
-          if (toolName === 'Bash') {
-            const result = await this.checkToolPermission(toolName, input as Record<string, unknown>, toolOptions.toolUseID);
-            if (result.allowed) {
-              return { behavior: 'allow' as const, updatedInput: result.updatedInput };
-            } else {
-              return { behavior: 'deny' as const, message: 'User denied permission' };
-            }
-          }
-
-          // Auto-approve MCP tools and other allowed tools
-          // Note: SDK plan mode tools (EnterPlanMode/ExitPlanMode) are blocked via disallowedTools
-          // We use safe mode instead, which is user-controlled via UI (not agent-controlled)
+        // NOTE: This callback is NOT called by the SDK because we set `permissionMode: 'bypassPermissions'` above.
+        // All permission logic is handled via the PreToolUse hook instead (see hooks.PreToolUse above).
+        // Skill qualification and Bash permission logic are in PreToolUse where they actually execute.
+        canUseTool: async (_toolName, input) => {
           return { behavior: 'allow' as const, updatedInput: input as Record<string, unknown> };
         },
         // Selectively disable tools - file tools are disabled (use MCP), web/code controlled by settings
@@ -2066,18 +2135,25 @@ export class CraftAgent {
     for (const s of sourcesNeedingAttention) {
       const status = s.config.connectionStatus;
       output += `\n\n<source_issue source="${s.config.slug}" status="${status}">`;
-      output += `\nThis source needs attention:`;
+
       if (s.config.connectionError) {
         output += `\nError: ${s.config.connectionError}`;
       }
 
-      // Provide appropriate fix instructions based on auth type
+      // Provide context-aware fix instructions based on auth type and transport
       const authTool = this.getAuthToolName(s);
       if (authTool) {
-        output += `\n\nTo fix: Re-authenticate using ${authTool}.`;
+        // Auth-based source - likely revoked or expired token
+        output += `\n\nThis source requires re-authentication. The user may have revoked access or the token expired.`;
+        output += `\nTo fix: Re-authenticate using ${authTool}.`;
+      } else if (s.config.mcp?.transport === 'stdio') {
+        // Local stdio server - process may have crashed or isn't installed
+        output += `\n\nThis is a local MCP server that is not responding. The server process may need to be restarted.`;
+        output += `\nTo fix: Check if the server command/path is correct and the process can start.`;
       } else {
-        // No-auth sources - suggest checking config/connectivity
-        output += `\n\nTo fix: Check the server URL, network connectivity, or source configuration. Use WebSearch to verify the current API endpoint is correct.`;
+        // Remote no-auth source - server unreachable or URL changed
+        output += `\n\nThis source's server is unreachable. It may be down or the URL may have changed.`;
+        output += `\nTo fix: Check the server URL and network connectivity. Use WebSearch to verify the endpoint is correct.`;
       }
       output += `\n</source_issue>`;
     }
@@ -2400,10 +2476,10 @@ Please continue the conversation naturally from where we left off.
       'server_error': {
         code: 'network_error',
         title: 'Connection Error',
-        message: 'Unable to connect to Anthropic servers. Check your internet connection.',
+        message: 'Unable to connect to the API server. Check your internet connection.',
         details: [
           'Verify your network connection is active',
-          'Check if api.anthropic.com is accessible',
+          'Check if the API endpoint is accessible',
           'Firewall or VPN may be blocking the connection',
         ],
         actions: [

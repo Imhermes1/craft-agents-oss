@@ -49,6 +49,7 @@ export default function WorkspaceSettingsPage() {
   const onModelChange = appShellContext.onModelChange
   const activeWorkspaceId = appShellContext.activeWorkspaceId
   const onRefreshWorkspaces = appShellContext.onRefreshWorkspaces
+  const customModel = appShellContext.customModel
 
   // Workspace settings state
   const [wsName, setWsName] = useState('')
@@ -388,17 +389,27 @@ export default function WorkspaceSettingsPage() {
             {/* Model */}
             <SettingsSection title="Model">
               <SettingsCard>
-                <SettingsMenuSelectRow
-                  label="Default model"
-                  description="AI model for new chats"
-                  value={wsModel}
-                  onValueChange={handleModelChange}
-                  options={[
-                    { value: 'claude-opus-4-5-20251101', label: 'Opus 4.5', description: 'Most capable for complex work' },
-                    { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5', description: 'Best for everyday tasks' },
-                    { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', description: 'Fastest for quick answers' },
-                  ]}
-                />
+                {/* When a custom API connection is active, model is fixed — show info instead of selector */}
+                {customModel ? (
+                  <SettingsRow
+                    label="Default model"
+                    description="Set via API connection"
+                  >
+                    <span className="text-sm text-muted-foreground">{customModel}</span>
+                  </SettingsRow>
+                ) : (
+                  <SettingsMenuSelectRow
+                    label="Default model"
+                    description="AI model for new chats"
+                    value={wsModel}
+                    onValueChange={handleModelChange}
+                    options={[
+                      { value: 'claude-opus-4-5-20251101', label: 'Opus 4.5', description: 'Most capable for complex work' },
+                      { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5', description: 'Best for everyday tasks' },
+                      { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', description: 'Fastest for quick answers' },
+                    ]}
+                  />
+                )}
                 <SettingsMenuSelectRow
                   label="Thinking level"
                   description="Reasoning depth for new chats"

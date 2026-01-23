@@ -126,7 +126,8 @@ export async function getAuthState(): Promise<AuthState> {
   // Determine if billing credentials are satisfied based on auth type
   let hasCredentials = false;
   if (config?.authType === 'api_key') {
-    hasCredentials = !!apiKey;
+    // Keyless providers (Ollama) are valid when a custom base URL is configured
+    hasCredentials = !!apiKey || !!config?.anthropicBaseUrl;
   } else if (config?.authType === 'oauth_token') {
     hasCredentials = !!claudeOAuth;
   }
