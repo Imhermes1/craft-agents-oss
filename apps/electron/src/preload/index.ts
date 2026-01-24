@@ -87,9 +87,6 @@ const api: ElectronAPI = {
   getHomeDir: () => ipcRenderer.invoke(IPC_CHANNELS.GET_HOME_DIR),
   isDebugMode: () => ipcRenderer.invoke(IPC_CHANNELS.IS_DEBUG_MODE),
 
-  // Git
-  getGitBranch: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.GET_GIT_BRANCH, path),
-
   // Auto-update
   checkForUpdates: () => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_CHECK),
   getUpdateInfo: () => ipcRenderer.invoke(IPC_CHANNELS.UPDATE_GET_INFO),
@@ -155,6 +152,9 @@ const api: ElectronAPI = {
     authType?: AuthType
     workspace?: { name: string; iconUrl?: string; mcpUrl?: string }
     credential?: string
+    mcpCredentials?: { accessToken: string; clientId?: string }
+    anthropicBaseUrl?: string | null
+    customModel?: string | null
   }) => ipcRenderer.invoke(IPC_CHANNELS.ONBOARDING_SAVE_CONFIG, config),
   // Claude OAuth
   getExistingClaudeToken: () => ipcRenderer.invoke(IPC_CHANNELS.ONBOARDING_GET_EXISTING_CLAUDE_TOKEN),
@@ -166,10 +166,12 @@ const api: ElectronAPI = {
   hasClaudeOAuthState: () => ipcRenderer.invoke(IPC_CHANNELS.ONBOARDING_HAS_CLAUDE_OAUTH_STATE),
   clearClaudeOAuthState: () => ipcRenderer.invoke(IPC_CHANNELS.ONBOARDING_CLEAR_CLAUDE_OAUTH_STATE),
 
-  // Settings - Billing
-  getBillingMethod: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_BILLING_METHOD),
-  updateBillingMethod: (authType: AuthType, credential?: string) =>
-    ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_UPDATE_BILLING_METHOD, authType, credential),
+  // Settings - API Setup
+  getApiSetup: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_API_SETUP),
+  updateApiSetup: (authType: AuthType, credential?: string, anthropicBaseUrl?: string | null, customModel?: string | null) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_UPDATE_API_SETUP, authType, credential, anthropicBaseUrl, customModel),
+  testApiConnection: (apiKey: string, baseUrl?: string, modelName?: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_TEST_API_CONNECTION, apiKey, baseUrl, modelName),
 
   // Settings - Model (global default)
   getModel: () => ipcRenderer.invoke(IPC_CHANNELS.SETTINGS_GET_MODEL),
@@ -188,6 +190,13 @@ const api: ElectronAPI = {
 
   // Folder dialog
   openFolderDialog: () => ipcRenderer.invoke(IPC_CHANNELS.OPEN_FOLDER_DIALOG),
+
+  // Filesystem search (for @ mention file selection)
+  searchFiles: (basePath: string, query: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.FS_SEARCH, basePath, query),
+  // Debug: send renderer logs to main process log file
+  debugLog: (...args: unknown[]) =>
+    ipcRenderer.send(IPC_CHANNELS.DEBUG_LOG, ...args),
 
   // User Preferences
   readPreferences: () => ipcRenderer.invoke(IPC_CHANNELS.PREFERENCES_READ),
@@ -237,18 +246,12 @@ const api: ElectronAPI = {
   },
   getMcpTools: (workspaceId: string, sourceSlug: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.SOURCES_GET_MCP_TOOLS, workspaceId, sourceSlug),
-  callMcpTool: (workspaceId: string, sourceSlug: string, toolName: string, args: Record<string, unknown>) =>
-    ipcRenderer.invoke(IPC_CHANNELS.SOURCES_CALL_MCP_TOOL, workspaceId, sourceSlug, toolName, args),
-
-  // Apple Reminders (native AppleScript)
-  getAppleReminders: () =>
-    ipcRenderer.invoke(IPC_CHANNELS.APPLE_REMINDERS_GET),
-  completeAppleReminder: (reminderName: string) =>
-    ipcRenderer.invoke(IPC_CHANNELS.APPLE_REMINDERS_COMPLETE, reminderName),
 
   // Status management
   listStatuses: (workspaceId: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.STATUSES_LIST, workspaceId),
+  reorderStatuses: (workspaceId: string, orderedIds: string[]) =>
+    ipcRenderer.invoke(IPC_CHANNELS.STATUSES_REORDER, workspaceId, orderedIds),
 
   // Generic workspace image loading/saving
   readWorkspaceImage: (workspaceId: string, relativePath: string) =>
@@ -300,6 +303,31 @@ const api: ElectronAPI = {
       ipcRenderer.removeListener(IPC_CHANNELS.STATUSES_CHANGED, handler)
     }
   },
+
+  // Label management
+  listLabels: (workspaceId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.LABELS_LIST, workspaceId),
+  createLabel: (workspaceId: string, input: any) =>
+    ipcRenderer.invoke(IPC_CHANNELS.LABELS_CREATE, workspaceId, input),
+  deleteLabel: (workspaceId: string, labelId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.LABELS_DELETE, workspaceId, labelId),
+
+  // Labels change listener (live updates when labels config changes)
+  onLabelsChanged: (callback: (workspaceId: string) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, workspaceId: string) => {
+      callback(workspaceId)
+    }
+    ipcRenderer.on(IPC_CHANNELS.LABELS_CHANGED, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.LABELS_CHANGED, handler)
+    }
+  },
+
+  // Views (dynamic, expression-based filters stored in views.json)
+  listViews: (workspaceId: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.VIEWS_LIST, workspaceId),
+  saveViews: (workspaceId: string, views: any[]) =>
+    ipcRenderer.invoke(IPC_CHANNELS.VIEWS_SAVE, workspaceId, views),
 
   // Theme (app-level only)
   getAppTheme: () => ipcRenderer.invoke(IPC_CHANNELS.THEME_GET_APP),
@@ -378,17 +406,8 @@ const api: ElectronAPI = {
       ipcRenderer.removeListener(IPC_CHANNELS.NOTIFICATION_NAVIGATE, handler)
     }
   },
-
-  // OpenRouter API (Chat mode)
-  getOpenRouterModels: () => ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_GET_MODELS),
-  getOpenRouterApiKey: () => ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_GET_API_KEY),
-  setOpenRouterApiKey: (key: string) => ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_SET_API_KEY, key),
-  deleteOpenRouterApiKey: () => ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_DELETE_API_KEY),
-
-  // OpenAI OAuth (Chat mode - direct via Codex login)
-  getOpenAIOAuthConfigured: () => ipcRenderer.invoke(IPC_CHANNELS.OPENAI_GET_OAUTH_CONFIGURED),
-  importCodexAuth: () => ipcRenderer.invoke(IPC_CHANNELS.OPENAI_IMPORT_CODEX_AUTH),
-  deleteOpenAIOAuth: () => ipcRenderer.invoke(IPC_CHANNELS.OPENAI_DELETE_OAUTH),
+  getGitBranch: (dirPath: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.GET_GIT_BRANCH, dirPath),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

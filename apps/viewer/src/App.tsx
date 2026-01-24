@@ -17,6 +17,7 @@ import {
   CodePreviewOverlay,
   DiffPreviewOverlay,
   TerminalPreviewOverlay,
+  JSONPreviewOverlay,
   extractOverlayData,
   type PlatformActions,
   type ActivityItem,
@@ -181,7 +182,7 @@ export function App() {
             <div className="text-destructive mb-4">{error}</div>
             <button
               onClick={handleClear}
-              className="px-4 py-2 rounded-md bg-background text-foreground shadow-sm border border-border hover:bg-accent transition-colors"
+              className="px-4 py-2 rounded-md bg-background text-foreground shadow-sm border border-border hover:bg-foreground/5 transition-colors"
             >
               Go back
             </button>
@@ -242,6 +243,18 @@ export function App() {
           toolType={overlayData.toolType}
           description={overlayData.description}
           theme={theme}
+        />
+      )}
+
+      {/* JSON preview overlay for tools returning JSON data */}
+      {overlayData?.type === 'json' && (
+        <JSONPreviewOverlay
+          isOpen={!!overlayActivity}
+          onClose={handleCloseOverlay}
+          data={overlayData.data}
+          title={overlayData.title}
+          theme={theme}
+          error={overlayData.error}
         />
       )}
 

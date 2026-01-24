@@ -44,6 +44,7 @@ import { ActiveOptionBadges } from "./ActiveOptionBadges"
 import { InputContainer, type StructuredInputState, type StructuredResponse, type PermissionResponse } from "./input"
 import type { RichTextInputHandle } from "@/components/ui/rich-text-input"
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks"
+import type { SessionMeta } from "@/atoms/sessions"
 import { CHAT_LAYOUT } from "@/config/layout"
 
 // ============================================================================
@@ -77,8 +78,6 @@ interface ChatDisplayProps {
   onSendMessage: (message: string, attachments?: FileAttachment[], skillSlugs?: string[]) => void
   onOpenFile: (path: string) => void
   onOpenUrl: (url: string) => void
-  /** Optional placeholder override for the input */
-  placeholder?: string | string[]
   // Model selection
   currentModel: string
   onModelChange: (model: string) => void
@@ -121,6 +120,11 @@ interface ChatDisplayProps {
   // Skill selection (for @mentions)
   /** Available skills for @mention autocomplete */
   skills?: LoadedSkill[]
+  // Label selection (for #labels)
+  /** Available label configs (tree) for label menu and badge display */
+  labels?: import('@craft-agent/shared/labels').LabelConfig[]
+  /** Callback when labels change */
+  onLabelsChange?: (labels: string[]) => void
   /** Workspace ID for loading skill icons */
   workspaceId?: string
   // Working directory (per session)
@@ -136,12 +140,6 @@ interface ChatDisplayProps {
   // Tutorial
   /** Disable send action (for tutorial guidance) */
   disableSend?: boolean
-  /** Chat mode: hide agent-only option badges (permission/ultrathink) */
-  hideOptionBadges?: boolean
-  /** Chat mode: hide built-in Claude model selector in input */
-  hideModelSelector?: boolean
-  /** Chat mode: show OpenRouter model selector at bottom */
-  showChatModeModelSelector?: boolean
 }
 
 /**
@@ -321,7 +319,6 @@ export function ChatDisplay({
   onSendMessage,
   onOpenFile,
   onOpenUrl,
-  placeholder,
   currentModel,
   onModelChange,
   textareaRef: externalTextareaRef,
@@ -347,6 +344,9 @@ export function ChatDisplay({
   onSourcesChange,
   // Skills (for @mentions)
   skills,
+  // Labels (for #labels)
+  labels,
+  onLabelsChange,
   workspaceId,
   // Working directory
   workingDirectory,
@@ -356,9 +356,6 @@ export function ChatDisplay({
   messagesLoading = false,
   // Tutorial
   disableSend = false,
-  hideOptionBadges = false,
-  hideModelSelector = false,
-  showChatModeModelSelector = false,
 }: ChatDisplayProps) {
   // Input is only disabled when explicitly disabled (e.g., agent needs activation)
   // User can type during streaming - submitting will stop the stream and send
@@ -854,26 +851,30 @@ export function ChatDisplay({
             CHAT_LAYOUT.maxWidth,
             "mx-auto w-full px-4 pb-4 mt-1"
           )}>
-            {/* Active option badges (Agent mode only) - positioned above input */}
-            {!hideOptionBadges && (
-              <ActiveOptionBadges
-                ultrathinkEnabled={ultrathinkEnabled}
-                onUltrathinkChange={onUltrathinkChange}
-                permissionMode={permissionMode}
-                onPermissionModeChange={onPermissionModeChange}
-                tasks={backgroundTasks}
-                sessionId={session.id}
-                onKillTask={(taskId) => killTask(taskId, backgroundTasks.find(t => t.id === taskId)?.type ?? 'shell')}
-                onInsertMessage={onInputChange}
-              />
-            )}
+            {/* Active option badges and tasks - positioned above input */}
+            <ActiveOptionBadges
+              ultrathinkEnabled={ultrathinkEnabled}
+              onUltrathinkChange={onUltrathinkChange}
+              permissionMode={permissionMode}
+              onPermissionModeChange={onPermissionModeChange}
+              tasks={backgroundTasks}
+              sessionId={session.id}
+              onKillTask={(taskId) => killTask(taskId, backgroundTasks.find(t => t.id === taskId)?.type ?? 'shell')}
+              onInsertMessage={onInputChange}
+              sessionLabels={session.labels}
+              labels={labels}
+              onRemoveLabel={(labelId) => {
+                // Remove label from session and persist
+                const newLabels = (session.labels || []).filter(id => id !== labelId)
+                onLabelsChange?.(newLabels)
+              }}
+            />
             <InputContainer
               disabled={isInputDisabled}
               isProcessing={session.isProcessing}
               onSubmit={handleSubmit}
               onStop={handleStop}
               textareaRef={textareaRef}
-              placeholder={placeholder}
               currentModel={currentModel}
               onModelChange={onModelChange}
               thinkingLevel={thinkingLevel}
@@ -891,6 +892,15 @@ export function ChatDisplay({
               enabledSourceSlugs={session.enabledSourceSlugs}
               onSourcesChange={onSourcesChange}
               skills={skills}
+              labels={labels}
+              sessionLabels={session.labels}
+              onLabelAdd={(labelId) => {
+                // Add label to session (prevent duplicates) and persist
+                const current = session.labels || []
+                if (!current.includes(labelId)) {
+                  onLabelsChange?.([...current, labelId])
+                }
+              }}
               workspaceId={workspaceId}
               workingDirectory={workingDirectory}
               onWorkingDirectoryChange={onWorkingDirectoryChange}
@@ -898,8 +908,6 @@ export function ChatDisplay({
               sessionId={session.id}
               disableSend={disableSend}
               isEmptySession={session.messages.length === 0}
-              hideModelSelector={hideModelSelector}
-              showChatModeModelSelector={showChatModeModelSelector}
               contextStatus={{
                 isCompacting: session.currentStatus?.statusType === 'compacting',
                 inputTokens: session.tokenUsage?.inputTokens,

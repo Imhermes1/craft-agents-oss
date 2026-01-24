@@ -11,6 +11,7 @@ import type {
   SessionMetadata as CoreSessionMetadata,
   StoredAttachment as CoreStoredAttachment,
   ContentBadge,
+  ToolDisplayMeta,
 } from '@craft-agent/core/types';
 
 // Import mode types from dedicated subpath export (avoids pulling in SDK)
@@ -32,6 +33,7 @@ export type {
   CoreSessionMetadata as SessionMetadata,
   CoreStoredAttachment as StoredAttachment,
   ContentBadge,
+  ToolDisplayMeta,
 };
 
 // Import and re-export auth types for onboarding
@@ -71,6 +73,17 @@ export interface SessionFile {
   children?: SessionFile[]  // Recursive children for directories
 }
 
+/**
+ * File search result for @ mention file selection.
+ * Returned by FS_SEARCH IPC handler when user types @filename in input.
+ */
+export interface FileSearchResult {
+  name: string
+  path: string
+  type: 'file' | 'directory'
+  relativePath: string  // Path relative to search base
+}
+
 // Import auth request types for unified auth flow
 import type { AuthRequest as SharedAuthRequest, CredentialInputMode as SharedCredentialInputMode, CredentialAuthRequest as SharedCredentialAuthRequest } from '@craft-agent/shared/agent';
 export type { SharedAuthRequest as AuthRequest };
@@ -85,40 +98,6 @@ export { generateMessageId } from '@craft-agent/core/types';
 export interface OAuthResult {
   success: boolean
   error?: string
-}
-
-/**
- * Session runtime discriminator
- * - 'claude': Uses CraftAgent with Claude SDK (Agent mode)
- * - 'openrouter-chat': Uses OpenRouterRuntime (Chat mode)
- */
-export type SessionRuntime = 'claude' | 'openrouter-chat'
-
-/**
- * OpenRouter model metadata from API
- */
-export interface OpenRouterModel {
-  id: string
-  name: string
-  description?: string
-  context_length: number
-  pricing: {
-    prompt: string
-    completion: string
-    image?: string
-  }
-  architecture?: {
-    modality: string
-    tokenizer: string
-  }
-  /**
-   * OpenAI-compatible parameter support flags from OpenRouter (when available).
-   * Used for filtering (e.g., tool calling).
-   */
-  supported_parameters?: string[]
-  top_provider?: {
-    max_completion_tokens?: number
-  }
 }
 
 /**
@@ -299,8 +278,16 @@ export interface Session {
   permissionMode?: PermissionMode
   // Todo state (user-controlled) - determines open vs closed
   todoState?: TodoState
+  // Labels (additive tags, many-per-session — bare IDs or "id::value" entries)
+  labels?: string[]
   // Read/unread tracking - ID of last message user has read
   lastReadMessageId?: string
+  /**
+   * Explicit unread flag - single source of truth for NEW badge.
+   * Set to true when assistant message completes while user is NOT viewing.
+   * Set to false when user views the session (and not processing).
+   */
+  hasUnread?: boolean
   // Per-session source selection (source slugs)
   enabledSourceSlugs?: string[]
   // Working directory for this session (used by agent for bash commands)
@@ -313,12 +300,12 @@ export interface Session {
   sharedId?: string
   // Model to use for this session (overrides global config if set)
   model?: string
-  // Runtime for this session (defaults to 'claude' for Agent mode)
-  runtime?: SessionRuntime
   // Thinking level for this session ('off', 'think', 'max')
   thinkingLevel?: ThinkingLevel
   // Role/type of the last message (for badge display without loading messages)
   lastMessageRole?: 'user' | 'assistant' | 'plan' | 'tool' | 'error'
+  // ID of the last final (non-intermediate) assistant message - pre-computed for unread detection
+  lastFinalMessageId?: string
   // Whether an async operation is ongoing (sharing, updating share, revoking, title regeneration)
   // Used for shimmer effect on session title in sidebar and panel header
   isAsyncOperationOngoing?: boolean
@@ -329,6 +316,10 @@ export interface Session {
     message: string
     statusType?: string
   }
+  // When the session was first created (ms timestamp)
+  createdAt?: number
+  // Total message count (pre-computed in JSONL header)
+  messageCount?: number
   // Token usage for context tracking
   tokenUsage?: {
     inputTokens: number
@@ -357,10 +348,6 @@ export interface CreateSessionOptions {
    * - Absolute path string: Use this specific path
    */
   workingDirectory?: string | 'user_default' | 'none'
-  /** Runtime for this session (defaults to 'claude') */
-  runtime?: SessionRuntime
-  /** Model for this session (used with openrouter-chat runtime) */
-  model?: string
 }
 
 // Events sent from main to renderer
@@ -368,12 +355,12 @@ export interface CreateSessionOptions {
 export type SessionEvent =
   | { type: 'text_delta'; sessionId: string; delta: string; turnId?: string }
   | { type: 'text_complete'; sessionId: string; text: string; isIntermediate?: boolean; turnId?: string; parentToolUseId?: string }
-  | { type: 'tool_start'; sessionId: string; toolName: string; toolUseId: string; toolInput: Record<string, unknown>; toolIntent?: string; toolDisplayName?: string; turnId?: string; parentToolUseId?: string }
+  | { type: 'tool_start'; sessionId: string; toolName: string; toolUseId: string; toolInput: Record<string, unknown>; toolIntent?: string; toolDisplayName?: string; toolDisplayMeta?: import('@craft-agent/core').ToolDisplayMeta; turnId?: string; parentToolUseId?: string }
   | { type: 'tool_result'; sessionId: string; toolUseId: string; toolName: string; result: string; turnId?: string; parentToolUseId?: string; isError?: boolean }
   | { type: 'parent_update'; sessionId: string; toolUseId: string; parentToolUseId: string }
   | { type: 'error'; sessionId: string; error: string }
   | { type: 'typed_error'; sessionId: string; error: TypedError }
-  | { type: 'complete'; sessionId: string; tokenUsage?: Session['tokenUsage'] }
+  | { type: 'complete'; sessionId: string; tokenUsage?: Session['tokenUsage']; hasUnread?: boolean }
   | { type: 'interrupted'; sessionId: string; message?: Message }
   | { type: 'status'; sessionId: string; message: string; statusType?: 'compacting' }
   | { type: 'info'; sessionId: string; message: string; statusType?: 'compaction_complete'; level?: 'info' | 'warning' | 'error' | 'success' }
@@ -389,6 +376,7 @@ export type SessionEvent =
   | { type: 'plan_submitted'; sessionId: string; message: CoreMessage }
   // Source events
   | { type: 'sources_changed'; sessionId: string; enabledSourceSlugs: string[] }
+  | { type: 'labels_changed'; sessionId: string; labels: string[] }
   // Background task/shell events
   | { type: 'task_backgrounded'; sessionId: string; toolUseId: string; taskId: string; intent?: string; turnId?: string }
   | { type: 'shell_backgrounded'; sessionId: string; toolUseId: string; shellId: string; intent?: string; command?: string; turnId?: string }
@@ -437,10 +425,13 @@ export type SessionCommand =
   | { type: 'setTodoState'; state: TodoState }
   | { type: 'markRead' }
   | { type: 'markUnread' }
+  /** Track which session user is actively viewing (for unread state machine) */
+  | { type: 'setActiveViewing'; workspaceId: string }
   | { type: 'setPermissionMode'; mode: PermissionMode }
   | { type: 'setThinkingLevel'; level: ThinkingLevel }
   | { type: 'updateWorkingDirectory'; dir: string }
   | { type: 'setSources'; sourceSlugs: string[] }
+  | { type: 'setLabels'; labels: string[] }
   | { type: 'showInFinder' }
   | { type: 'copyPath' }
   | { type: 'shareToViewer' }
@@ -511,6 +502,11 @@ export const IPC_CHANNELS = {
   STORE_ATTACHMENT: 'file:storeAttachment',
   GENERATE_THUMBNAIL: 'file:generateThumbnail',
 
+  // Filesystem search (for @ mention file selection)
+  FS_SEARCH: 'fs:search',
+  // Debug logging from renderer → main log file
+  DEBUG_LOG: 'debug:log',
+
   // Session info panel
   GET_SESSION_FILES: 'sessions:getFiles',
   GET_SESSION_NOTES: 'sessions:getNotes',
@@ -527,9 +523,6 @@ export const IPC_CHANNELS = {
   GET_VERSIONS: 'system:versions',
   GET_HOME_DIR: 'system:homeDir',
   IS_DEBUG_MODE: 'system:isDebugMode',
-
-  // Git
-  GET_GIT_BRANCH: 'git:branch',
 
   // Auto-update
   UPDATE_CHECK: 'update:check',
@@ -573,9 +566,10 @@ export const IPC_CHANNELS = {
   ONBOARDING_HAS_CLAUDE_OAUTH_STATE: 'onboarding:hasClaudeOAuthState',
   ONBOARDING_CLEAR_CLAUDE_OAUTH_STATE: 'onboarding:clearClaudeOAuthState',
 
-  // Settings - Billing
-  SETTINGS_GET_BILLING_METHOD: 'settings:getBillingMethod',
-  SETTINGS_UPDATE_BILLING_METHOD: 'settings:updateBillingMethod',
+  // Settings - API Setup
+  SETTINGS_GET_API_SETUP: 'settings:getApiSetup',
+  SETTINGS_UPDATE_API_SETUP: 'settings:updateApiSetup',
+  SETTINGS_TEST_API_CONNECTION: 'settings:testApiConnection',
 
   // Settings - Model
   SETTINGS_GET_MODEL: 'settings:getModel',
@@ -603,7 +597,7 @@ export const IPC_CHANNELS = {
   SOURCES_START_OAUTH: 'sources:startOAuth',
   SOURCES_SAVE_CREDENTIALS: 'sources:saveCredentials',
   SOURCES_CHANGED: 'sources:changed',
-
+  
   // Source permissions config
   SOURCES_GET_PERMISSIONS: 'sources:getPermissions',
   // Workspace permissions config (for Explore mode)
@@ -612,13 +606,8 @@ export const IPC_CHANNELS = {
   DEFAULT_PERMISSIONS_GET: 'permissions:getDefaults',
   // Broadcast when default permissions change (file watcher)
   DEFAULT_PERMISSIONS_CHANGED: 'permissions:defaultsChanged',
-  // MCP tools listing and calling
+  // MCP tools listing
   SOURCES_GET_MCP_TOOLS: 'sources:getMcpTools',
-  SOURCES_CALL_MCP_TOOL: 'sources:callTool',
-
-  // Apple Reminders (native AppleScript integration)
-  APPLE_REMINDERS_GET: 'appleReminders:get',
-  APPLE_REMINDERS_COMPLETE: 'appleReminders:complete',
 
   // Skills (workspace-scoped)
   SKILLS_GET: 'skills:get',
@@ -630,7 +619,18 @@ export const IPC_CHANNELS = {
 
   // Status management (workspace-scoped)
   STATUSES_LIST: 'statuses:list',
+  STATUSES_REORDER: 'statuses:reorder',  // Reorder statuses (drag-and-drop)
   STATUSES_CHANGED: 'statuses:changed',  // Broadcast event
+
+  // Label management (workspace-scoped)
+  LABELS_LIST: 'labels:list',
+  LABELS_CREATE: 'labels:create',
+  LABELS_DELETE: 'labels:delete',
+  LABELS_CHANGED: 'labels:changed',  // Broadcast event
+
+  // Views management (workspace-scoped, stored in views.json)
+  VIEWS_LIST: 'views:list',
+  VIEWS_SAVE: 'views:save',
 
   // Theme management (cascading: app → workspace)
   THEME_APP_CHANGED: 'theme:appChanged',        // Broadcast event
@@ -668,16 +668,8 @@ export const IPC_CHANNELS = {
   WINDOW_FOCUS_STATE: 'window:focusState',  // Broadcast: boolean (isFocused)
   WINDOW_GET_FOCUS_STATE: 'window:getFocusState',
 
-  // OpenRouter API (Chat mode)
-  OPENROUTER_GET_MODELS: 'openrouter:getModels',
-  OPENROUTER_GET_API_KEY: 'openrouter:getApiKey',
-  OPENROUTER_SET_API_KEY: 'openrouter:setApiKey',
-  OPENROUTER_DELETE_API_KEY: 'openrouter:deleteApiKey',
-
-  // OpenAI OAuth (Chat mode - direct via Codex login)
-  OPENAI_GET_OAUTH_CONFIGURED: 'openai:getOAuthConfigured',
-  OPENAI_IMPORT_CODEX_AUTH: 'openai:importCodexAuth',
-  OPENAI_DELETE_OAUTH: 'openai:deleteOAuth',
+  // Git operations
+  GET_GIT_BRANCH: 'git:getBranch',
 } as const
 
 // Re-import types for ElectronAPI
@@ -731,6 +723,11 @@ export interface ElectronAPI {
   storeAttachment(sessionId: string, attachment: FileAttachment): Promise<import('../../../../packages/core/src/types/index.ts').StoredAttachment>
   generateThumbnail(base64: string, mimeType: string): Promise<string | null>
 
+  // Filesystem search (for @ mention file selection)
+  searchFiles(basePath: string, query: string): Promise<FileSearchResult[]>
+  // Debug: send renderer logs to main process log file
+  debugLog(...args: unknown[]): void
+
   // Theme
   getSystemTheme(): Promise<boolean>
   onSystemThemeChange(callback: (isDark: boolean) => void): () => void
@@ -739,9 +736,6 @@ export interface ElectronAPI {
   getVersions(): { node: string; chrome: string; electron: string }
   getHomeDir(): Promise<string>
   isDebugMode(): Promise<boolean>
-
-  // Git
-  getGitBranch(path: string): Promise<string | null>
 
   // Auto-update
   checkForUpdates(): Promise<UpdateInfo>
@@ -778,6 +772,9 @@ export interface ElectronAPI {
     authType?: AuthType  // Optional - if not provided, preserves existing auth type (for add workspace)
     workspace?: { name: string; iconUrl?: string; mcpUrl?: string }  // Optional - if not provided, only updates billing
     credential?: string  // API key or OAuth token based on authType
+    mcpCredentials?: { accessToken: string; clientId?: string }  // MCP OAuth credentials
+    anthropicBaseUrl?: string | null  // Custom Anthropic API base URL
+    customModel?: string | null  // Custom model ID override
   }): Promise<OnboardingSaveResult>
   // Claude OAuth
   getExistingClaudeToken(): Promise<string | null>
@@ -789,9 +786,10 @@ export interface ElectronAPI {
   hasClaudeOAuthState(): Promise<boolean>
   clearClaudeOAuthState(): Promise<{ success: boolean }>
 
-  // Settings - Billing
-  getBillingMethod(): Promise<BillingMethodInfo>
-  updateBillingMethod(authType: AuthType, credential?: string): Promise<void>
+  // Settings - API Setup
+  getApiSetup(): Promise<ApiSetupInfo>
+  updateApiSetup(authType: AuthType, credential?: string, anthropicBaseUrl?: string | null, customModel?: string | null): Promise<void>
+  testApiConnection(apiKey: string, baseUrl?: string, modelName?: string): Promise<{ success: boolean; error?: string; modelCount?: number }>
 
   // Settings - Model (global default)
   getModel(): Promise<string | null>
@@ -835,11 +833,6 @@ export interface ElectronAPI {
   getWorkspacePermissionsConfig(workspaceId: string): Promise<import('@craft-agent/shared/agent').PermissionsConfigFile | null>
   getDefaultPermissionsConfig(): Promise<{ config: import('@craft-agent/shared/agent').PermissionsConfigFile | null; path: string }>
   getMcpTools(workspaceId: string, sourceSlug: string): Promise<McpToolsResult>
-  callMcpTool(workspaceId: string, sourceSlug: string, toolName: string, args: Record<string, unknown>): Promise<any>
-
-  // Apple Reminders (native AppleScript)
-  getAppleReminders(): Promise<{ success: boolean; reminders?: any[]; error?: string }>
-  completeAppleReminder(reminderName: string): Promise<{ success: boolean; error?: string }>
 
   // Sources change listener (live updates when sources are added/removed)
   onSourcesChanged(callback: (sources: LoadedSource[]) => void): () => void
@@ -859,8 +852,20 @@ export interface ElectronAPI {
 
   // Statuses (workspace-scoped)
   listStatuses(workspaceId: string): Promise<import('@craft-agent/shared/statuses').StatusConfig[]>
+  reorderStatuses(workspaceId: string, orderedIds: string[]): Promise<void>
   // Statuses change listener (live updates when statuses config or icon files change)
   onStatusesChanged(callback: (workspaceId: string) => void): () => void
+
+  // Labels (workspace-scoped)
+  listLabels(workspaceId: string): Promise<import('@craft-agent/shared/labels').LabelConfig[]>
+  createLabel(workspaceId: string, input: import('@craft-agent/shared/labels').CreateLabelInput): Promise<import('@craft-agent/shared/labels').LabelConfig>
+  deleteLabel(workspaceId: string, labelId: string): Promise<{ stripped: number }>
+  // Labels change listener (live updates when labels config changes)
+  onLabelsChanged(callback: (workspaceId: string) => void): () => void
+
+  // Views (workspace-scoped, stored in views.json)
+  listViews(workspaceId: string): Promise<import('@craft-agent/shared/views').ViewConfig[]>
+  saveViews(workspaceId: string, views: import('@craft-agent/shared/views').ViewConfig[]): Promise<void>
 
   // Generic workspace image loading/saving (returns data URL for images, raw string for SVG)
   readWorkspaceImage(workspaceId: string, relativePath: string): Promise<string>
@@ -897,18 +902,8 @@ export interface ElectronAPI {
   broadcastThemePreferences(preferences: { mode: string; colorTheme: string; font: string }): Promise<void>
   onThemePreferencesChange(callback: (preferences: { mode: string; colorTheme: string; font: string }) => void): () => void
 
-  // OpenRouter API (Chat mode)
-  getOpenRouterModels(): Promise<OpenRouterModel[]>
-  getOpenRouterApiKey(): Promise<string | null>
-  setOpenRouterApiKey(key: string): Promise<void>
-  deleteOpenRouterApiKey(): Promise<boolean>
-
-  // OpenAI OAuth (Chat mode - direct via Codex login)
-  getOpenAIOAuthConfigured(): Promise<boolean>
-  /** Import Codex CLI login from ~/.codex/auth.json */
-  importCodexAuth(): Promise<{ success: boolean; error?: string }>
-  /** Delete stored OpenAI OAuth token */
-  deleteOpenAIOAuth(): Promise<boolean>
+  // Git operations
+  getGitBranch(dirPath: string): Promise<string | null>
 }
 
 /**
@@ -921,11 +916,14 @@ export interface ClaudeOAuthResult {
 }
 
 /**
- * Current billing method info for settings
+ * Current API setup info for settings
  */
-export interface BillingMethodInfo {
+export interface ApiSetupInfo {
   authType: AuthType
   hasCredential: boolean
+  apiKey?: string  // The stored API key (only returned for api_key auth type)
+  anthropicBaseUrl?: string  // Custom Anthropic API base URL (for third-party compatible APIs)
+  customModel?: string  // Custom model ID override (for third-party APIs)
 }
 
 /**
@@ -938,8 +936,6 @@ export interface UpdateInfo {
   currentVersion: string
   /** Latest available version (null if check failed) */
   latestVersion: string | null
-  /** Download URL for the update DMG */
-  downloadUrl: string | null
   /** Download state */
   downloadState: 'idle' | 'downloading' | 'ready' | 'installing' | 'error'
   /** Download progress (0-100) */
@@ -996,25 +992,19 @@ export type RightSidebarPanel =
  * - 'allChats': All sessions regardless of status
  * - 'flagged': Only flagged sessions
  * - 'state': Sessions with specific status ID
+ * - 'label': Sessions with specific label (includes descendants via tree hierarchy)
  */
 export type ChatFilter =
   | { kind: 'allChats' }
   | { kind: 'flagged' }
   | { kind: 'state'; stateId: string }
-
-/**
- * Source filter options - determines which sources to show
- * - 'all': All sources regardless of type
- * - 'type': Sources of specific type (api, mcp, local)
- */
-export type SourceFilter =
-  | { kind: 'all' }
-  | { kind: 'type'; sourceType: 'api' | 'mcp' | 'local' }
+  | { kind: 'label'; labelId: string }
+  | { kind: 'view'; viewId: string }
 
 /**
  * Settings subpage options
  */
-export type SettingsSubpage = 'app' | 'workspace' | 'permissions' | 'shortcuts' | 'preferences'
+export type SettingsSubpage = 'app' | 'workspace' | 'permissions' | 'labels' | 'shortcuts' | 'preferences'
 
 /**
  * Chats navigation state - shows SessionList in navigator
@@ -1029,11 +1019,19 @@ export interface ChatsNavigationState {
 }
 
 /**
+ * Source type filter for sources navigation (e.g., show only APIs, MCPs, or Local sources)
+ */
+export interface SourceFilter {
+  kind: 'type'
+  sourceType: 'api' | 'mcp' | 'local'
+}
+
+/**
  * Sources navigation state - shows SourcesListPanel in navigator
  */
 export interface SourcesNavigationState {
   navigator: 'sources'
-  /** Filter to show all sources or by type (api, mcp, local). Defaults to 'all' if not specified. */
+  /** Optional filter for source type */
   filter?: SourceFilter
   /** Selected source details, or null for empty state */
   details: { type: 'source'; sourceSlug: string } | null
@@ -1064,17 +1062,6 @@ export interface SkillsNavigationState {
 }
 
 /**
- * Chat navigation state - shows ChatModePanel in navigator (OpenRouter chat mode)
- */
-export interface ChatNavigationState {
-  navigator: 'chat'
-  /** Selected chat details, or null for homepage */
-  details: { type: 'chat'; sessionId: string } | null
-  /** Optional right sidebar panel state */
-  rightSidebar?: RightSidebarPanel
-}
-
-/**
  * Unified navigation state - single source of truth for all 3 panels
  *
  * From this state we can derive:
@@ -1084,7 +1071,6 @@ export interface ChatNavigationState {
  */
 export type NavigationState =
   | ChatsNavigationState
-  | ChatNavigationState
   | SourcesNavigationState
   | SettingsNavigationState
   | SkillsNavigationState
@@ -1118,13 +1104,6 @@ export const isSkillsNavigation = (
 ): state is SkillsNavigationState => state.navigator === 'skills'
 
 /**
- * Type guard to check if state is chat navigation (OpenRouter chat mode)
- */
-export const isChatNavigation = (
-  state: NavigationState
-): state is ChatNavigationState => state.navigator === 'chat'
-
-/**
  * Default navigation state - allChats with no selection
  */
 export const DEFAULT_NAVIGATION_STATE: NavigationState = {
@@ -1138,15 +1117,10 @@ export const DEFAULT_NAVIGATION_STATE: NavigationState = {
  */
 export const getNavigationStateKey = (state: NavigationState): string => {
   if (state.navigator === 'sources') {
-    // Build base key from filter (sources, sources/api, sources/mcp, sources/local)
-    let base = 'sources'
-    if (state.filter?.kind === 'type') {
-      base = `sources/${state.filter.sourceType}`
-    }
     if (state.details) {
-      return `${base}/source/${state.details.sourceSlug}`
+      return `sources/source/${state.details.sourceSlug}`
     }
-    return base
+    return 'sources'
   }
   if (state.navigator === 'skills') {
     if (state.details) {
@@ -1157,17 +1131,12 @@ export const getNavigationStateKey = (state: NavigationState): string => {
   if (state.navigator === 'settings') {
     return `settings:${state.subpage}`
   }
-  // Chat (OpenRouter mode)
-  if (state.navigator === 'chat') {
-    if (state.details) {
-      return `chat/session/${state.details.sessionId}`
-    }
-    return 'chat'
-  }
-  // Chats (Agent mode)
+  // Chats
   const f = state.filter
   let base: string
   if (f.kind === 'state') base = `state:${f.stateId}`
+  else if (f.kind === 'label') base = `label:${f.labelId}`
+  else if (f.kind === 'view') base = `view:${f.viewId}`
   else base = f.kind
   if (state.details) {
     return `${base}/chat/${state.details.sessionId}`
@@ -1180,22 +1149,8 @@ export const getNavigationStateKey = (state: NavigationState): string => {
  * Returns null if the key is invalid
  */
 export const parseNavigationStateKey = (key: string): NavigationState | null => {
-  // Handle sources with optional type filter (sources, sources/api, sources/mcp, sources/local)
+  // Handle sources
   if (key === 'sources') return { navigator: 'sources', details: null }
-
-  // Check for type-filtered sources (e.g., sources/api, sources/mcp, sources/local)
-  const sourceTypeMatch = key.match(/^sources\/(api|mcp|local)(?:\/source\/(.+))?$/)
-  if (sourceTypeMatch) {
-    const sourceType = sourceTypeMatch[1] as 'api' | 'mcp' | 'local'
-    const sourceSlug = sourceTypeMatch[2]
-    return {
-      navigator: 'sources',
-      filter: { kind: 'type', sourceType },
-      details: sourceSlug ? { type: 'source', sourceSlug } : null,
-    }
-  }
-
-  // Unfiltered source selection (e.g., sources/source/my-source)
   if (key.startsWith('sources/source/')) {
     const sourceSlug = key.slice(15)
     if (sourceSlug) {
@@ -1218,19 +1173,9 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
   if (key === 'settings') return { navigator: 'settings', subpage: 'app' }
   if (key.startsWith('settings:')) {
     const subpage = key.slice(9) as SettingsSubpage
-    if (['app', 'workspace', 'shortcuts', 'preferences'].includes(subpage)) {
+    if (['app', 'workspace', 'permissions', 'labels', 'shortcuts', 'preferences'].includes(subpage)) {
       return { navigator: 'settings', subpage }
     }
-  }
-
-  // Handle chat (OpenRouter mode)
-  if (key === 'chat') return { navigator: 'chat', details: null }
-  if (key.startsWith('chat/session/')) {
-    const sessionId = key.slice(13)
-    if (sessionId) {
-      return { navigator: 'chat', details: { type: 'chat', sessionId } }
-    }
-    return { navigator: 'chat', details: null }
   }
 
   // Handle chats - parse filter and optional session
@@ -1242,6 +1187,14 @@ export const parseNavigationStateKey = (key: string): NavigationState | null => 
       const stateId = filterKey.slice(6)
       if (!stateId) return null
       filter = { kind: 'state', stateId }
+    } else if (filterKey.startsWith('label:')) {
+      const labelId = filterKey.slice(6)
+      if (!labelId) return null
+      filter = { kind: 'label', labelId }
+    } else if (filterKey.startsWith('view:')) {
+      const viewId = filterKey.slice(5)
+      if (!viewId) return null
+      filter = { kind: 'view', viewId }
     } else {
       return null
     }

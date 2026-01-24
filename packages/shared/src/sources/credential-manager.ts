@@ -87,6 +87,10 @@ export interface BasicAuthCredential {
  * ```
  */
 export class SourceCredentialManager {
+  // Track in-flight refresh promises to prevent concurrent refreshes for the same source
+  // This prevents race conditions (especially important for Microsoft which rotates refresh tokens)
+  private pendingRefreshes = new Map<string, Promise<string | null>>();
+
   // ============================================================
   // Core CRUD Operations
   // ============================================================
@@ -591,8 +595,35 @@ export class SourceCredentialManager {
    *
    * Returns the new access token, or null if refresh fails.
    * On success, credentials are automatically updated.
+   *
+   * Uses promise deduplication to prevent concurrent refresh requests for the same source.
+   * This is important because:
+   * - Multiple API calls may hit refresh simultaneously when token is expiring
+   * - Microsoft rotates refresh tokens, so concurrent refreshes could cause token invalidation
    */
   async refresh(source: LoadedSource): Promise<string | null> {
+    const key = source.config.slug;
+
+    // Return existing refresh promise if one is in progress
+    const pending = this.pendingRefreshes.get(key);
+    if (pending) {
+      debug(`[SourceCredentialManager] Reusing pending refresh for ${key}`);
+      return pending;
+    }
+
+    // Create and track new refresh promise
+    const refreshPromise = this.doRefresh(source).finally(() => {
+      this.pendingRefreshes.delete(key);
+    });
+
+    this.pendingRefreshes.set(key, refreshPromise);
+    return refreshPromise;
+  }
+
+  /**
+   * Internal refresh implementation
+   */
+  private async doRefresh(source: LoadedSource): Promise<string | null> {
     const cred = await this.load(source);
     if (!cred?.refreshToken) {
       debug(`[SourceCredentialManager] No refresh token for ${source.config.slug}`);

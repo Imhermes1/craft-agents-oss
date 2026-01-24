@@ -11,7 +11,7 @@ import {
   ChevronDown,
   Loader2,
 } from 'lucide-react'
-import { Icon_Folder } from '@craft-agent/ui'
+import { Icon_Home, Icon_Folder } from '@craft-agent/ui'
 
 import * as storage from '@/lib/local-storage'
 
@@ -27,9 +27,14 @@ import {
   type MentionItem,
   type MentionItemType,
 } from '@/components/ui/mention-menu'
+import {
+  InlineLabelMenu,
+  useInlineLabelMenu,
+} from '@/components/ui/label-menu'
+import type { LabelConfig } from '@craft-agent/shared/labels'
 import { parseMentions } from '@/lib/mentions'
 import { RichTextInput, type RichTextInputHandle } from '@/components/ui/rich-text-input'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@craft-agent/ui'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -47,7 +52,9 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { cn } from '@/lib/utils'
 import { applySmartTypography } from '@/lib/smart-typography'
 import { AttachmentPreview } from '../AttachmentPreview'
-import { MODELS, getModelShortName } from '@config/models'
+import { MODELS, getModelShortName, getModelContextWindow, isClaudeModel } from '@config/models'
+import { useOptionalAppShellContext } from '@/context/AppShellContext'
+import { EditPopover, getEditConfig } from '@/components/ui/EditPopover'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { FreeFormInputContextBadge } from './FreeFormInputContextBadge'
 import { ChatModelSelector } from '../ChatModelSelector'
@@ -75,11 +82,21 @@ function formatTokenCount(tokens: number): string {
 /** Default rotating placeholders for onboarding/empty state */
 const DEFAULT_PLACEHOLDERS = [
   'What would you like to work on?',
-  'Ask me to analyze your codebase...',
-  'Describe a bug you need help fixing...',
-  'I can help you write documentation...',
-  'Let\'s refactor some code together...',
+  'Use Shift + Tab to switch between Explore and Execute',
+  'Type @ to mention files, folders, or skills',
+  'Type # to apply labels to this conversation',
+  'Press Shift + Return to add a new line',
 ]
+
+/** Fisher-Yates shuffle — returns a new array in random order */
+function shuffleArray<T>(array: T[]): T[] {
+  const shuffled = [...array]
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+  return shuffled
+}
 
 export interface FreeFormInputProps {
   /** Placeholder text(s) for the textarea - can be array for rotation */
@@ -131,6 +148,13 @@ export interface FreeFormInputProps {
   // Skill selection (for @mentions)
   /** Available skills for @mention autocomplete */
   skills?: LoadedSkill[]
+  // Label selection (for #labels)
+  /** Available labels for #label autocomplete */
+  labels?: LabelConfig[]
+  /** Currently applied session labels */
+  sessionLabels?: string[]
+  /** Callback when a label is added via # menu */
+  onLabelAdd?: (labelId: string) => void
   /** Workspace ID for loading skill icons */
   workspaceId?: string
   /** Current working directory path */
@@ -195,6 +219,9 @@ export function FreeFormInput({
   enabledSourceSlugs = [],
   onSourcesChange,
   skills = [],
+  labels = [],
+  sessionLabels = [],
+  onLabelAdd,
   workspaceId,
   workingDirectory,
   onWorkingDirectoryChange,
@@ -206,6 +233,22 @@ export function FreeFormInput({
   hideModelSelector = false,
   showChatModeModelSelector = false,
 }: FreeFormInputProps) {
+  // Read custom model and workspace info from context.
+  // Uses optional variant so playground (no provider) doesn't crash.
+  const appShellCtx = useOptionalAppShellContext()
+  const customModel = appShellCtx?.customModel ?? null
+  // Resolve workspace rootPath for "Add New Label" deep link
+  const workspaceRootPath = React.useMemo(() => {
+    if (!appShellCtx || !workspaceId) return null
+    return appShellCtx.workspaces.find(w => w.id === workspaceId)?.rootPath ?? null
+  }, [appShellCtx, workspaceId])
+
+  // Shuffle placeholder order once per mount so each session feels fresh
+  const shuffledPlaceholder = React.useMemo(
+    () => Array.isArray(placeholder) ? shuffleArray(placeholder) : placeholder,
+    [] // eslint-disable-line react-hooks/exhaustive-deps -- intentionally shuffle only on mount
+  )
+
   // Performance optimization: Always use internal state for typing to avoid parent re-renders
   // Sync FROM parent on mount/change (for restoring drafts)
   // Sync TO parent on blur/submit (debounced persistence)
@@ -558,7 +601,7 @@ export function FreeFormInput({
     homeDir,
   })
 
-  // Handle mention selection (sources, skills - folders moved to slash menu)
+  // Handle mention selection (sources, skills, files)
   const handleMentionSelect = React.useCallback((item: MentionItem) => {
     // For sources: enable the source immediately
     if (item.type === 'source' && item.source && onSourcesChange) {
@@ -570,18 +613,53 @@ export function FreeFormInput({
       }
     }
 
-    // Skills don't need special handling - just the text insertion
+    // Files via @ mention: [file:path] in text is sufficient context for the agent.
+    // Skills also don't need special handling beyond text insertion.
   }, [optimisticSourceSlugs, onSourcesChange])
 
-  // Inline mention hook (for skills and sources only)
+  // Inline mention hook (for skills, sources, and files)
   const inlineMention = useInlineMention({
     inputRef: richInputRef,
     skills,
     sources,
+    basePath: workingDirectory,
     onSelect: handleMentionSelect,
+    workspaceId,
   })
 
-  // NOTE: Mentions are now rendered inline in RichTextInput, no separate badge row needed
+  // Inline label menu hook (for #labels)
+  const handleLabelSelect = React.useCallback((labelId: string) => {
+    onLabelAdd?.(labelId)
+  }, [onLabelAdd])
+
+  const inlineLabel = useInlineLabelMenu({
+    inputRef: richInputRef,
+    labels,
+    sessionLabels,
+    onSelect: handleLabelSelect,
+  })
+
+  // "Add New Label" handler: cleans up the #trigger text and opens a controlled
+  // EditPopover so the user can describe the label before the agent creates it.
+  const [addLabelPopoverOpen, setAddLabelPopoverOpen] = React.useState(false)
+  const handleAddLabel = React.useCallback((prefill: string) => {
+    if (!workspaceRootPath) return
+
+    // Remove the #trigger text from input
+    const cleaned = inlineLabel.handleSelect('')
+    setInput(cleaned)
+    syncToParent(cleaned)
+    inlineLabel.close()
+
+    // Open the EditPopover for label creation
+    setAddLabelPopoverOpen(true)
+  }, [workspaceRootPath, inlineLabel, syncToParent])
+
+  // Memoize the add-label config so the EditPopover doesn't recreate on every render
+  const addLabelEditConfig = React.useMemo(() => {
+    if (!workspaceRootPath) return null
+    return getEditConfig('add-label', workspaceRootPath)
+  }, [workspaceRootPath])
 
   // Report height changes to parent (for external animation sync)
   React.useLayoutEffect(() => {
@@ -848,9 +926,11 @@ export function FreeFormInput({
       return
     }
 
-    // Don't submit when mention menu is open - let it handle the Enter key
+    // Don't submit when mention menu is open AND has visible content
     if (inlineMention.isOpen) {
-      if (e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      // Only intercept navigation/selection keys if menu actually shows items or is loading
+      const hasVisibleContent = inlineMention.sections.some(s => s.items.length > 0) || inlineMention.isSearching
+      if (hasVisibleContent && (e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         // These keys are handled by the InlineMentionMenu component
         return
       }
@@ -870,6 +950,18 @@ export function FreeFormInput({
       if (e.key === 'Escape') {
         e.preventDefault()
         inlineSlash.close()
+        return
+      }
+    }
+
+    // Don't submit when label menu is open - let it handle navigation keys
+    if (inlineLabel.isOpen) {
+      if (e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        inlineLabel.close()
         return
       }
     }
@@ -923,9 +1015,12 @@ export function FreeFormInput({
     // Update inline mention state (for @mentions - skills, sources, folders)
     inlineMention.handleInputChange(value, cursorPosition)
 
-    // Auto-capitalize first letter (but not for slash commands or @mentions)
+    // Update inline label state (for #labels)
+    inlineLabel.handleInputChange(value, cursorPosition)
+
+    // Auto-capitalize first letter (but not for slash commands, @mentions, or #labels)
     let newValue = value
-    if (value.length > 0 && value.charAt(0) !== '/' && value.charAt(0) !== '@') {
+    if (value.length > 0 && value.charAt(0) !== '/' && value.charAt(0) !== '@' && value.charAt(0) !== '#') {
       const capitalizedFirst = value.charAt(0).toUpperCase()
       if (capitalizedFirst !== value.charAt(0)) {
         newValue = capitalizedFirst + value.slice(1)
@@ -946,7 +1041,7 @@ export function FreeFormInput({
         richInputRef.current?.setSelectionRange(typography.cursor, typography.cursor)
       })
     }
-  }, [inlineSlash, inlineMention, syncToParent])
+  }, [inlineSlash, inlineMention, inlineLabel, syncToParent])
 
   // Handle inline slash command selection (removes the /command text)
   const handleInlineSlashCommandSelect = React.useCallback((commandId: SlashCommandId) => {
@@ -975,6 +1070,14 @@ export function FreeFormInput({
       richInputRef.current?.setSelectionRange(cursorPosition, cursorPosition)
     }, 0)
   }, [inlineMention, syncToParent])
+
+  // Handle inline label selection (removes the #label text from input)
+  const handleInlineLabelSelect = React.useCallback((labelId: string) => {
+    const newValue = inlineLabel.handleSelect(labelId)
+    setInput(newValue)
+    syncToParent(newValue)
+    richInputRef.current?.focus()
+  }, [inlineLabel, syncToParent])
 
   const hasContent = input.trim() || attachments.length > 0
 
@@ -1006,7 +1109,7 @@ export function FreeFormInput({
           position={inlineSlash.position}
         />
 
-        {/* Inline Mention Autocomplete (skills, sources) */}
+        {/* Inline Mention Autocomplete (skills, sources, files) */}
         <InlineMentionMenu
           open={inlineMention.isOpen}
           onOpenChange={(open) => !open && inlineMention.close()}
@@ -1016,7 +1119,34 @@ export function FreeFormInput({
           position={inlineMention.position}
           workspaceId={workspaceId}
           maxWidth={280}
+          isSearching={inlineMention.isSearching}
         />
+
+        {/* Inline Label Autocomplete (#labels) */}
+        <InlineLabelMenu
+          open={inlineLabel.isOpen}
+          onOpenChange={(open) => !open && inlineLabel.close()}
+          items={inlineLabel.items}
+          onSelect={handleInlineLabelSelect}
+          onAddLabel={handleAddLabel}
+          filter={inlineLabel.filter}
+          position={inlineLabel.position}
+        />
+
+        {/* Controlled EditPopover for "Add New Label" — opens when user selects
+            the option from the # menu with no matches */}
+        {addLabelEditConfig && (
+          <EditPopover
+            trigger={<span className="absolute top-0 left-0 w-0 h-0 overflow-hidden" />}
+            open={addLabelPopoverOpen}
+            onOpenChange={setAddLabelPopoverOpen}
+            context={addLabelEditConfig.context}
+            example={addLabelEditConfig.example}
+            overridePlaceholder={addLabelEditConfig.overridePlaceholder}
+            side="top"
+            align="start"
+          />
+        )}
 
         {/* Attachment Preview */}
         <AttachmentPreview
@@ -1042,7 +1172,7 @@ export function FreeFormInput({
             setIsFocused(false)
             onFocusChange?.(false)
           }}
-          placeholder={placeholder}
+          placeholder={shuffledPlaceholder}
           disabled={disabled}
           skills={skills}
           sources={sources}
@@ -1293,71 +1423,89 @@ export function FreeFormInput({
                       modelDropdownOpen && "bg-foreground/5"
                     )}
                   >
-                    {getModelShortName(currentModel)}
-                    <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
+                    {/* Show custom model name when a custom API connection is active */}
+                    {getModelShortName(customModel || currentModel)}
+                    {!customModel && <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />}
                   </button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="top">Model</TooltipContent>
             </Tooltip>
             <StyledDropdownMenuContent side="top" align="end" sideOffset={8} className="min-w-[240px]">
-              {/* Model options */}
-              {MODELS.map((model) => {
-                const isSelected = currentModel === model.id
-                const descriptions: Record<string, string> = {
-                  'claude-opus-4-5-20251101': 'Most capable for complex work',
-                  'claude-sonnet-4-5-20250929': 'Best for everyday tasks',
-                  'claude-haiku-4-5-20251001': 'Fastest for quick answers',
-                }
-                return (
-                  <StyledDropdownMenuItem
-                    key={model.id}
-                    onSelect={() => onModelChange(model.id)}
-                    className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
-                  >
-                    <div className="text-left">
-                      <div className="font-medium text-sm">{model.name}</div>
-                      <div className="text-xs text-muted-foreground">{descriptions[model.id] || model.description}</div>
-                    </div>
-                    {isSelected && (
-                      <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
-                    )}
-                  </StyledDropdownMenuItem>
-                )
-              })}
-
-              {/* Separator before thinking level */}
-              <StyledDropdownMenuSeparator className="my-1" />
-
-              {/* Thinking Level - Radix submenu with automatic edge detection */}
-              <DropdownMenuSub>
-                <StyledDropdownMenuSubTrigger className="flex items-center justify-between px-2 py-2 rounded-lg">
-                  <div className="text-left flex-1">
-                    <div className="font-medium text-sm">{getThinkingLevelName(thinkingLevel)}</div>
-                    <div className="text-xs text-muted-foreground">Extended reasoning depth</div>
+              {/* When custom model is active, show it as a static item instead of Anthropic options */}
+              {customModel ? (
+                <StyledDropdownMenuItem
+                  disabled
+                  className="flex items-center justify-between px-2 py-2 rounded-lg"
+                >
+                  <div className="text-left">
+                    <div className="font-medium text-sm">{customModel}</div>
+                    <div className="text-xs text-muted-foreground">Custom API connection</div>
                   </div>
-                </StyledDropdownMenuSubTrigger>
-                <StyledDropdownMenuSubContent className="min-w-[220px]">
-                  {THINKING_LEVELS.map(({ id, name, description }) => {
-                    const isSelected = thinkingLevel === id
-                    return (
-                      <StyledDropdownMenuItem
-                        key={id}
-                        onSelect={() => onThinkingLevelChange?.(id)}
-                        className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
-                      >
-                        <div className="text-left">
-                          <div className="font-medium text-sm">{name}</div>
-                          <div className="text-xs text-muted-foreground">{description}</div>
-                        </div>
-                        {isSelected && (
-                          <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
-                        )}
-                      </StyledDropdownMenuItem>
-                    )
-                  })}
-                </StyledDropdownMenuSubContent>
-              </DropdownMenuSub>
+                  <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
+                </StyledDropdownMenuItem>
+              ) : (
+                /* Standard Anthropic model options */
+                MODELS.map((model) => {
+                  const isSelected = currentModel === model.id
+                  const descriptions: Record<string, string> = {
+                    'claude-opus-4-5-20251101': 'Most capable for complex work',
+                    'claude-sonnet-4-5-20250929': 'Best for everyday tasks',
+                    'claude-haiku-4-5-20251001': 'Fastest for quick answers',
+                  }
+                  return (
+                    <StyledDropdownMenuItem
+                      key={model.id}
+                      onSelect={() => onModelChange(model.id)}
+                      className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
+                    >
+                      <div className="text-left">
+                        <div className="font-medium text-sm">{model.name}</div>
+                        <div className="text-xs text-muted-foreground">{descriptions[model.id] || model.description}</div>
+                      </div>
+                      {isSelected && (
+                        <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
+                      )}
+                    </StyledDropdownMenuItem>
+                  )
+                })
+              )}
+
+              {/* Thinking level selector — only shown for Claude models (extended thinking is Claude-specific) */}
+              {(!customModel || isClaudeModel(customModel)) && (
+                <>
+                  <StyledDropdownMenuSeparator className="my-1" />
+
+                  <DropdownMenuSub>
+                    <StyledDropdownMenuSubTrigger className="flex items-center justify-between px-2 py-2 rounded-lg">
+                      <div className="text-left flex-1">
+                        <div className="font-medium text-sm">{getThinkingLevelName(thinkingLevel)}</div>
+                        <div className="text-xs text-muted-foreground">Extended reasoning depth</div>
+                      </div>
+                    </StyledDropdownMenuSubTrigger>
+                    <StyledDropdownMenuSubContent className="min-w-[220px]">
+                      {THINKING_LEVELS.map(({ id, name, description }) => {
+                        const isSelected = thinkingLevel === id
+                        return (
+                          <StyledDropdownMenuItem
+                            key={id}
+                            onSelect={() => onThinkingLevelChange?.(id)}
+                            className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
+                          >
+                            <div className="text-left">
+                              <div className="font-medium text-sm">{name}</div>
+                              <div className="text-xs text-muted-foreground">{description}</div>
+                            </div>
+                            {isSelected && (
+                              <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
+                            )}
+                          </StyledDropdownMenuItem>
+                        )
+                      })}
+                    </StyledDropdownMenuSubContent>
+                  </DropdownMenuSub>
+                </>
+              )}
 
               {/* Context usage footer - only show when we have token data */}
               {contextStatus?.inputTokens != null && contextStatus.inputTokens > 0 && (
@@ -1372,10 +1520,14 @@ export function FreeFormInput({
                         )}
                         {formatTokenCount(contextStatus.inputTokens)}
                         {/* Show compaction threshold (~77.5% of context window) as the limit,
-                            since that's when auto-compaction kicks in - not the full context window */}
-                        {contextStatus.contextWindow && (
-                          <span className="opacity-60">/ {formatTokenCount(Math.round(contextStatus.contextWindow * 0.775))}</span>
-                        )}
+                            since that's when auto-compaction kicks in - not the full context window.
+                            Falls back to known model context window when SDK hasn't reported usage yet. */}
+                        {(() => {
+                          const ctxWindow = contextStatus.contextWindow || getModelContextWindow(customModel || currentModel)
+                          return ctxWindow ? (
+                            <span className="opacity-60">/ {formatTokenCount(Math.round(ctxWindow * 0.775))}</span>
+                          ) : null
+                        })()}
                       </span>
                     </div>
                   </div>
@@ -1390,8 +1542,10 @@ export function FreeFormInput({
             // Calculate usage percentage based on compaction threshold (~77.5% of context window),
             // not the full context window - this gives users meaningful warnings before compaction kicks in.
             // SDK triggers compaction at ~155k tokens for a 200k context window.
-            const compactionThreshold = contextStatus?.contextWindow
-              ? Math.round(contextStatus.contextWindow * 0.775)
+            // Falls back to known per-model context window when SDK hasn't reported usage yet.
+            const effectiveContextWindow = contextStatus?.contextWindow || getModelContextWindow(customModel || currentModel)
+            const compactionThreshold = effectiveContextWindow
+              ? Math.round(effectiveContextWindow * 0.775)
               : null
             const usagePercent = contextStatus?.inputTokens && compactionThreshold
               ? Math.min(99, Math.round((contextStatus.inputTokens / compactionThreshold) * 100))
@@ -1593,7 +1747,7 @@ function WorkingDirectoryBadge({
       <PopoverTrigger asChild>
         <span>
           <FreeFormInputContextBadge
-            icon={<Icon_Folder className="h-4 w-4" strokeWidth={1.75} />}
+            icon={<Icon_Home className="h-4 w-4" />}
             label={folderName}
             isExpanded={isEmptySession}
             hasSelection={hasFolder}
@@ -1634,7 +1788,7 @@ function WorkingDirectoryBadge({
                 className={cn(MENU_ITEM_STYLE, 'pointer-events-none bg-foreground/5')}
                 disabled
               >
-                <Icon_Folder className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+                <Icon_Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <span className="flex-1 min-w-0 truncate">
                   <span>{folderName}</span>
                   <span className="text-muted-foreground ml-1.5">{formatPathForDisplay(workingDirectory, homeDir)}</span>
@@ -1658,7 +1812,7 @@ function WorkingDirectoryBadge({
                   onSelect={() => handleSelectRecent(path)}
                   className={cn(MENU_ITEM_STYLE, 'data-[selected=true]:bg-foreground/5')}
                 >
-                  <Icon_Folder className="h-4 w-4 shrink-0 text-muted-foreground" strokeWidth={1.75} />
+                  <Icon_Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <span className="flex-1 min-w-0 truncate">
                     <span>{recentFolderName}</span>
                     <span className="text-muted-foreground ml-1.5">{formatPathForDisplay(path, homeDir)}</span>

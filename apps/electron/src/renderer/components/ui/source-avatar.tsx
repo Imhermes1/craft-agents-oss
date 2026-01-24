@@ -1,116 +1,48 @@
 /**
- * SourceAvatar - Unified avatar component for sources
+ * SourceAvatar - Thin wrapper around EntityIcon for sources.
  *
- * Provides consistent styling for all source icons.
- * Uses CrossfadeAvatar internally for smooth image loading with fallback support.
+ * Sets fallbackIcon based on source type (McpIcon, Globe, HardDrive, etc.)
+ * and adds source-specific extras:
+ * - Favicon resolution as secondary fallback when no local icon found
+ * - Connection status indicator dot (only when showStatus=true)
  *
- * Supports three icon types:
- * - File-based icons (icon.svg, icon.png) - loaded via IPC
- * - Emoji icons (from config.icon) - rendered as text
- * - URL icons - resolved via favicon service or downloaded
- * - Default fallback (type-specific icon)
- *
- * Two usage patterns:
- * 1. Direct props: <SourceAvatar type="mcp" name="Linear" logoUrl="..." />
- * 2. Source object: <SourceAvatar source={loadedSource} />
- *
- * Size variants:
- * - xs: 14x14 (compact)
- * - sm: 16x16 (dropdowns, inline, sidebar)
- * - md: 20x20 (auth steps)
- * - lg: 24x24 (info panels)
- *
- * Status indicator:
- * - Set showStatus={true} to show a colored dot indicating connection status
- * - Green: Connected, Yellow: Needs auth, Red: Failed, Gray: Untested
+ * Use `fluid` prop for fill-parent sizing (e.g., hero panels).
  */
 
 import * as React from 'react'
-import { CrossfadeAvatar } from '@/components/ui/avatar'
-import { cn } from '@/lib/utils'
-import {
-  sourceIconCache,
-  logoUrlCache,
-  clearIconCaches,
-  svgToThemedDataUrl,
-} from '@/lib/icon-cache'
-import { Mail, Plug, Globe, HardDrive } from 'lucide-react'
+import { Globe, HardDrive, Mail, Plug } from 'lucide-react'
+import { EntityIcon, type IconComponent } from '@/components/ui/entity-icon'
+import { useEntityIcon, logoUrlCache } from '@/lib/icon-cache'
 import { McpIcon } from '@/components/icons/McpIcon'
-import { deriveServiceUrl } from '@craft-agent/shared/utils/service-url'
-import { isEmoji } from '@craft-agent/shared/utils/icon-constants'
 import type { LoadedSource } from '@craft-agent/shared/sources/types'
-import type { SourceConnectionStatus } from '../../../shared/types'
+import type { IconSize, ResolvedEntityIcon } from '@craft-agent/shared/icons'
 import { SourceStatusIndicator, deriveConnectionStatus } from './source-status-indicator'
 
+// ============================================================================
+// Types
+// ============================================================================
+
 export type SourceType = 'mcp' | 'api' | 'gmail' | 'local'
-export type SourceAvatarSize = 'xs' | 'sm' | 'md' | 'lg'
 
-/** Props for direct usage with explicit type/name/logo */
-interface DirectSourceAvatarProps {
-  /** Source type for automatic fallback icon */
-  type: SourceType
-  /** Service name for alt text */
-  name: string
-  /** Logo URL (Google Favicon URL) - if not provided, derives from serviceUrl */
-  logoUrl?: string | null
-  /** Service URL to derive logo from (used if logoUrl not provided) */
-  serviceUrl?: string
-  /** Provider name for canonical domain mapping */
-  provider?: string
-  /** Size variant */
-  size?: SourceAvatarSize
-  /** Show connection status indicator */
-  showStatus?: boolean
-  /** Connection status (for direct props mode) */
-  status?: SourceConnectionStatus
-  /** Error message for failed status */
-  statusError?: string
-  /** Additional className overrides */
-  className?: string
-  /** Not used in direct mode */
-  source?: never
-}
-
-/** Props for usage with LoadedSource object */
-interface LoadedSourceAvatarProps {
-  /** LoadedSource object to extract type/name/logo from */
+interface SourceAvatarProps {
+  /** LoadedSource object */
   source: LoadedSource
-  /** Size variant */
-  size?: SourceAvatarSize
+  /** Size variant (default: 'md') */
+  size?: IconSize
+  /** Fill parent container (h-full w-full). Overrides size. */
+  fluid?: boolean
   /** Show connection status indicator (auto-derived from source) */
   showStatus?: boolean
   /** Additional className overrides */
   className?: string
-  /** Not used in source mode */
-  type?: never
-  name?: never
-  logoUrl?: never
-  serviceUrl?: never
-  provider?: never
-  status?: never
-  statusError?: never
 }
 
-type SourceAvatarProps = DirectSourceAvatarProps | LoadedSourceAvatarProps
+// ============================================================================
+// Fallback Icons per Source Type
+// ============================================================================
 
-// Size configurations (container only - icons fill parent with padding)
-const SIZE_CONFIG: Record<SourceAvatarSize, string> = {
-  xs: 'h-3.5 w-3.5',
-  sm: 'h-4 w-4',
-  md: 'h-5 w-5',
-  lg: 'h-6 w-6',
-}
-
-// Font size mapping for emoji rendering at different avatar sizes
-const EMOJI_SIZE_CONFIG: Record<SourceAvatarSize, string> = {
-  xs: 'text-[10px]',
-  sm: 'text-[11px]',
-  md: 'text-[13px]',
-  lg: 'text-[16px]',
-}
-
-// Fallback icons by source type
-const FALLBACK_ICONS: Record<SourceType, React.ComponentType<{ className?: string }>> = {
+/** Source-specific fallback icons based on source type */
+const SOURCE_FALLBACKS: Record<string, IconComponent> = {
   mcp: McpIcon,
   api: Globe,
   gmail: Mail,
@@ -120,254 +52,138 @@ const FALLBACK_ICONS: Record<SourceType, React.ComponentType<{ className?: strin
 /**
  * Get the fallback icon for a source type
  */
-export function getSourceFallbackIcon(type: SourceType): React.ComponentType<{ className?: string }> {
-  return FALLBACK_ICONS[type] ?? Plug
+export function getSourceFallbackIcon(type: SourceType): IconComponent {
+  return SOURCE_FALLBACKS[type] ?? Plug
 }
 
-// Status indicator size based on avatar size
-const STATUS_SIZE_CONFIG: Record<SourceAvatarSize, 'xs' | 'sm' | 'md'> = {
+// ============================================================================
+// Status Indicator Size Mapping
+// ============================================================================
+
+const STATUS_SIZE_CONFIG: Record<IconSize, 'xs' | 'sm' | 'md'> = {
   xs: 'xs',
   sm: 'xs',
   md: 'sm',
   lg: 'sm',
+  xl: 'md',
 }
 
-/**
- * Clear the source icon cache (useful when sources are updated)
- */
-export function clearSourceIconCache(): void {
-  clearIconCaches()
-}
+// ============================================================================
+// Favicon Hook (source-specific secondary fallback)
+// ============================================================================
 
 /**
- * Hook to load a workspace image via IPC
- * Returns the loaded image URL (data URL for binary, raw content for SVG)
- * Uses shared sourceIconCache from lib/icon-cache
+ * Resolve a favicon URL from the source's service URL.
+ * Only attempts resolution when the primary icon (local file) is not found.
  */
-function useWorkspaceImage(
-  workspaceId: string | undefined,
-  relativePath: string | undefined
+function useFaviconFallback(
+  source: LoadedSource,
+  primaryIcon: ResolvedEntityIcon
 ): string | null {
-  const [imageUrl, setImageUrl] = React.useState<string | null>(() => {
-    // Check cache on initial render
-    if (workspaceId && relativePath) {
-      const cacheKey = `${workspaceId}:${relativePath}`
-      return sourceIconCache.get(cacheKey) ?? null
-    }
-    return null
-  })
+  const [faviconUrl, setFaviconUrl] = React.useState<string | null>(null)
+
+  // Only resolve favicon when primary icon resolved to fallback (no local file found)
+  const needsFavicon = primaryIcon.kind === 'fallback'
+
+  // Extract stable primitive deps from source.config to avoid re-renders on object ref changes
+  const slug = source.config.slug
+  const provider = source.config.provider
+  const mcpUrl = source.config.mcp?.url
+  const apiBaseUrl = source.config.api?.baseUrl
+  const sourceType = source.config.type
 
   React.useEffect(() => {
-    if (!workspaceId || !relativePath) {
-      setImageUrl(null)
+    if (!needsFavicon) {
+      setFaviconUrl(null)
       return
     }
 
-    const cacheKey = `${workspaceId}:${relativePath}`
+    // Derive service URL from primitive fields
+    let serviceUrl: string | null = null
+    if (sourceType === 'mcp' && mcpUrl) serviceUrl = mcpUrl
+    else if (sourceType === 'api' && apiBaseUrl) serviceUrl = apiBaseUrl
 
-    // Check cache first
-    const cached = sourceIconCache.get(cacheKey)
-    if (cached) {
-      setImageUrl(cached)
-      return
-    }
-
-    // Load via IPC
-    let cancelled = false
-    window.electronAPI.readWorkspaceImage(workspaceId, relativePath)
-      .then((result) => {
-        if (cancelled) return
-
-        // For SVG, theme and convert to data URL
-        // This injects foreground color since currentColor doesn't work in background-image
-        let url = result
-        if (relativePath.endsWith('.svg')) {
-          url = svgToThemedDataUrl(result)
-        }
-
-        sourceIconCache.set(cacheKey, url)
-        setImageUrl(url)
-      })
-      .catch((error) => {
-        if (cancelled) return
-        console.error(`[SourceAvatar] Failed to load image ${relativePath}:`, error)
-        setImageUrl(null)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [workspaceId, relativePath])
-
-  return imageUrl
-}
-
-/**
- * Hook to resolve logo URL via IPC (uses Node.js filesystem cache)
- * Returns the resolved logo URL or null
- */
-function useLogoUrl(
-  serviceUrl: string | undefined | null,
-  provider: string | undefined
-): string | null {
-  const [logoUrl, setLogoUrl] = React.useState<string | null>(() => {
-    // Check cache on initial render
-    if (serviceUrl) {
-      const cacheKey = `${serviceUrl}:${provider ?? ''}`
-      const cached = logoUrlCache.get(cacheKey)
-      if (cached !== undefined) {
-        return cached
-      }
-    }
-    return null
-  })
-
-  React.useEffect(() => {
     if (!serviceUrl) {
-      setLogoUrl(null)
+      setFaviconUrl(null)
       return
     }
 
-    const cacheKey = `${serviceUrl}:${provider ?? ''}`
+    const resolvedProvider = slug ?? provider
+    const cacheKey = `${serviceUrl}:${resolvedProvider ?? ''}`
 
-    // Check cache first
+    // Check logo URL cache first
     const cached = logoUrlCache.get(cacheKey)
     if (cached !== undefined) {
-      setLogoUrl(cached)
+      setFaviconUrl(cached)
       return
     }
 
-    // Resolve via IPC (uses Node.js filesystem cache for provider domains)
+    // Resolve via IPC
     let cancelled = false
-    window.electronAPI.getLogoUrl(serviceUrl, provider)
+    window.electronAPI.getLogoUrl(serviceUrl, resolvedProvider)
       .then((result) => {
         if (cancelled) return
         logoUrlCache.set(cacheKey, result)
-        setLogoUrl(result)
+        setFaviconUrl(result)
       })
-      .catch((error) => {
+      .catch(() => {
         if (cancelled) return
-        console.error(`[SourceAvatar] Failed to resolve logo URL:`, error)
         logoUrlCache.set(cacheKey, null)
-        setLogoUrl(null)
+        setFaviconUrl(null)
       })
 
-    return () => {
-      cancelled = true
-    }
-  }, [serviceUrl, provider])
+    return () => { cancelled = true }
+  }, [needsFavicon, slug, provider, mcpUrl, apiBaseUrl, sourceType])
 
-  return logoUrl
+  return faviconUrl
 }
 
-export function SourceAvatar(props: SourceAvatarProps) {
-  const { size = 'md', className, showStatus } = props
+// ============================================================================
+// Component
+// ============================================================================
 
-  // Extract type, name, logo URL, and status based on props variant
-  let type: SourceType
-  let name: string
-  let connectionStatus: SourceConnectionStatus | undefined
-  let connectionError: string | undefined
+export function SourceAvatar({ source, size = 'md', fluid, showStatus, className }: SourceAvatarProps) {
+  const icon = useEntityIcon({
+    workspaceId: source.workspaceId,
+    entityType: 'source',
+    identifier: source.config.slug,
+    iconDir: `sources/${source.config.slug}`,
+    iconValue: source.config.icon,
+  })
 
-  // For local icons, we need workspaceId and relative path
-  let workspaceId: string | undefined
-  let localIconPath: string | undefined
+  // Source-specific: favicon as secondary fallback when no local icon found
+  const faviconUrl = useFaviconFallback(source, icon)
 
-  // For emoji icons from config.icon
-  let emojiIcon: string | undefined
+  // If primary icon resolved to fallback but we have a favicon, use it as file icon
+  const finalIcon: ResolvedEntityIcon = icon.kind === 'fallback' && faviconUrl
+    ? { kind: 'file', value: faviconUrl, colorable: false }
+    : icon
 
-  // For remote icons, we need serviceUrl and provider
-  let serviceUrl: string | null = null
-  let provider: string | undefined
-  let explicitLogoUrl: string | null | undefined
+  const FallbackIcon = SOURCE_FALLBACKS[source.config.type] ?? Plug
 
-  if ('source' in props && props.source) {
-    // LoadedSource mode
-    const source = props.source
-    type = source.config.type as SourceType
-    name = source.config.name
-    workspaceId = source.workspaceId
-    // Use slug for favicon resolution - it's more specific than generic provider names
-    // e.g., "gmail" slug maps to mail.google.com, while "google" provider has no mapping
-    provider = source.config.slug ?? source.config.provider
-
-    // Check icon field for emoji or URL
-    const icon = source.config.icon
-    if (icon && isEmoji(icon)) {
-      // Emoji icon - render as text
-      emojiIcon = icon
-    } else {
-      // Try to find local icon file (icon.svg, icon.png, etc.)
-      // The watcher downloads URL icons to local files automatically
-      // We check for common extensions - the actual file is found via IPC
-      localIconPath = `sources/${source.config.slug}/icon`
-    }
-
-    // If no icon field set, derive service URL for favicon resolution
-    if (!icon && !emojiIcon) {
-      serviceUrl = deriveServiceUrl(source.config)
-    }
-
-    // Derive status from source
-    connectionStatus = deriveConnectionStatus(source)
-    connectionError = source.config.connectionError
-  } else {
-    // Direct props mode
-    const directProps = props as DirectSourceAvatarProps
-    type = directProps.type
-    name = directProps.name
-    explicitLogoUrl = directProps.logoUrl
-    serviceUrl = directProps.serviceUrl ?? null
-    provider = directProps.provider
-    connectionStatus = directProps.status
-    connectionError = directProps.statusError
-  }
-
-  // Load local icon via IPC if needed (tries icon.svg, icon.png, etc.)
-  const loadedLocalIcon = useWorkspaceImage(workspaceId, localIconPath ? localIconPath + '.svg' : undefined)
-  const loadedLocalIconPng = useWorkspaceImage(workspaceId, localIconPath && !loadedLocalIcon ? localIconPath + '.png' : undefined)
-  const finalLocalIcon = loadedLocalIcon ?? loadedLocalIconPng
-
-  // Resolve logo URL via IPC (only if no local icon, no emoji, and no explicit URL)
-  const resolvedLogoUrl = useLogoUrl(
-    !finalLocalIcon && !emojiIcon && !explicitLogoUrl ? serviceUrl : null,
-    provider
+  const entityIcon = (
+    <EntityIcon
+      icon={finalIcon}
+      size={size}
+      fallbackIcon={FallbackIcon}
+      alt={source.config.name}
+      className={className}
+      containerClassName={fluid ? 'h-full w-full' : undefined}
+    />
   )
 
-  // Final resolved URL: local icon > explicit URL > resolved URL > null
-  const finalLogoUrl = finalLocalIcon ?? explicitLogoUrl ?? resolvedLogoUrl
-
-  const FallbackIcon = FALLBACK_ICONS[type] ?? Plug
-  const statusSize = STATUS_SIZE_CONFIG[size]
-
-  // Only apply size classes if className doesn't contain custom size classes
-  const hasCustomSize = className?.match(/\b(h-|w-|size-)/)
-  const containerSize = hasCustomSize ? undefined : SIZE_CONFIG[size]
-  const defaultClasses = hasCustomSize ? undefined : 'rounded-[4px] ring-1 ring-border/30 shrink-0'
-
-  // Priority: local file > emoji > URL > fallback
-  // If we have an emoji icon and no local file, render emoji
-  if (emojiIcon && !finalLocalIcon) {
+  // Only wrap with relative container when status indicator is needed
+  if (showStatus) {
+    const connectionStatus = deriveConnectionStatus(source)
+    const statusSize = STATUS_SIZE_CONFIG[size]
     return (
       <span className="relative inline-flex shrink-0">
-        <div
-          className={cn(
-            containerSize,
-            defaultClasses,
-            'flex items-center justify-center bg-muted',
-            EMOJI_SIZE_CONFIG[size],
-            'leading-none',
-            className
-          )}
-          title={name}
-        >
-          {emojiIcon}
-        </div>
-        {showStatus && connectionStatus && (
+        {entityIcon}
+        {connectionStatus && (
           <span className="absolute -bottom-0.5 -right-0.5">
             <SourceStatusIndicator
               status={connectionStatus}
-              errorMessage={connectionError}
+              errorMessage={source.config.connectionError}
               size={statusSize}
             />
           </span>
@@ -376,28 +192,5 @@ export function SourceAvatar(props: SourceAvatarProps) {
     )
   }
 
-  return (
-    <span className="relative inline-flex shrink-0">
-      <CrossfadeAvatar
-        src={finalLogoUrl}
-        alt={name}
-        className={cn(
-          containerSize,
-          defaultClasses,
-          className
-        )}
-        fallbackClassName="bg-muted rounded-[4px]"
-        fallback={<FallbackIcon className="w-full h-full text-muted-foreground" />}
-      />
-      {showStatus && connectionStatus && (
-        <span className="absolute -bottom-0.5 -right-0.5">
-          <SourceStatusIndicator
-            status={connectionStatus}
-            errorMessage={connectionError}
-            size={statusSize}
-          />
-        </span>
-      )}
-    </span>
-  )
+  return entityIcon
 }

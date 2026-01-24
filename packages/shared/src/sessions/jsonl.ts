@@ -5,7 +5,7 @@
  * Format: Line 1 = SessionHeader, Lines 2+ = StoredMessage (one per line)
  */
 
-import { openSync, readSync, closeSync, readFileSync, writeFileSync } from 'fs';
+import { openSync, readSync, closeSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { open, readFile } from 'fs/promises';
 import type { SessionHeader, StoredSession, StoredMessage, SessionTokenUsage } from './types.ts';
 import { toPortablePath, expandPath } from '../utils/paths.ts';
@@ -46,7 +46,9 @@ export function readSessionJsonl(sessionFile: string): StoredSession | null {
     if (!firstLine) return null;
 
     const header = JSON.parse(firstLine) as SessionHeader;
-    const messages = lines.slice(1).map(line => JSON.parse(line) as StoredMessage);
+    // Parse messages resiliently: skip lines that fail to parse (e.g. truncated by crash)
+    // rather than losing the entire session's messages
+    const messages = parseMessagesResilient(lines.slice(1));
 
     // Migration: For sessions created before sdkCwd was added, use workingDirectory as fallback.
     // This is correct because the old code used workingDirectory for SDK's cwd parameter.
@@ -63,8 +65,10 @@ export function readSessionJsonl(sessionFile: string): StoredSession | null {
       sdkSessionId: header.sdkSessionId,
       isFlagged: header.isFlagged,
       todoState: header.todoState,
+      labels: header.labels,
       permissionMode: header.permissionMode,
       lastReadMessageId: header.lastReadMessageId,
+      hasUnread: header.hasUnread,  // Explicit unread flag for NEW badge state machine
       enabledSourceSlugs: header.enabledSourceSlugs,
       workingDirectory: workingDir,
       sdkCwd,
@@ -81,7 +85,10 @@ export function readSessionJsonl(sessionFile: string): StoredSession | null {
 }
 
 /**
- * Write session to JSONL format.
+ * Write session to JSONL format using atomic write (write-to-temp-then-rename).
+ * Prevents file corruption if the process crashes mid-write: either the old
+ * file remains intact or the new file is fully written. Never a partial file.
+ *
  * Line 1: Header with pre-computed metadata
  * Lines 2+: Messages (one per line)
  */
@@ -93,7 +100,9 @@ export function writeSessionJsonl(sessionFile: string, session: StoredSession): 
     ...session.messages.map(m => JSON.stringify(m)),
   ];
 
-  writeFileSync(sessionFile, lines.join('\n') + '\n');
+  const tmpFile = sessionFile + '.tmp';
+  writeFileSync(tmpFile, lines.join('\n') + '\n');
+  renameSync(tmpFile, sessionFile);
 }
 
 /**
@@ -111,8 +120,10 @@ export function createSessionHeader(session: StoredSession): SessionHeader {
     sdkSessionId: session.sdkSessionId,
     isFlagged: session.isFlagged,
     todoState: session.todoState,
+    labels: session.labels,
     permissionMode: session.permissionMode,
     lastReadMessageId: session.lastReadMessageId,
+    hasUnread: session.hasUnread,  // Explicit unread flag for NEW badge state machine
     enabledSourceSlugs: session.enabledSourceSlugs,
     workingDirectory: session.workingDirectory,
     sdkCwd: session.sdkCwd,
@@ -124,6 +135,7 @@ export function createSessionHeader(session: StoredSession): SessionHeader {
     lastMessageRole: extractLastMessageRole(session.messages),
     preview: extractPreview(session.messages),
     tokenUsage: session.tokenUsage,
+    lastFinalMessageId: extractLastFinalMessageId(session.messages),
   };
 }
 
@@ -138,6 +150,21 @@ function extractLastMessageRole(messages: StoredMessage[]): SessionHeader['lastM
   const role = lastMessage.type;
   if (role === 'user' || role === 'assistant' || role === 'plan' || role === 'tool' || role === 'error') {
     return role;
+  }
+  return undefined;
+}
+
+/**
+ * Extract the ID of the last final (non-intermediate) assistant message.
+ * Used for unread detection in session list without loading all messages.
+ */
+function extractLastFinalMessageId(messages: StoredMessage[]): string | undefined {
+  // Walk backwards to find the last assistant message that isn't intermediate
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg?.type === 'assistant' && !msg.isIntermediate) {
+      return msg.id;
+    }
   }
   return undefined;
 }
@@ -187,15 +214,34 @@ export async function readSessionHeaderAsync(sessionFile: string): Promise<Sessi
 /**
  * Read only messages from a JSONL file (skips header).
  * Used for lazy loading when session is selected.
+ * Resilient to corrupted/truncated lines (skips them instead of failing entirely).
  */
 export function readSessionMessages(sessionFile: string): StoredMessage[] {
   try {
     const content = readFileSync(sessionFile, 'utf-8');
     const lines = content.split('\n').filter(Boolean);
-    // Skip first line (header), parse rest as messages
-    return lines.slice(1).map(line => JSON.parse(line) as StoredMessage);
+    // Skip first line (header), parse rest as messages resiliently
+    return parseMessagesResilient(lines.slice(1));
   } catch (error) {
     debug('[jsonl] Failed to read session messages:', sessionFile, error);
     return [];
   }
+}
+
+/**
+ * Parse message lines resiliently: skip lines that fail JSON.parse
+ * (e.g. truncated by a crash mid-write) rather than losing all messages.
+ */
+function parseMessagesResilient(lines: string[]): StoredMessage[] {
+  const messages: StoredMessage[] = [];
+  for (const line of lines) {
+    try {
+      messages.push(JSON.parse(line) as StoredMessage);
+    } catch {
+      // Corrupted/truncated line (likely from a crash during write).
+      // Skip it and continue — losing one message is better than losing all.
+      debug('[jsonl] Skipping corrupted message line (truncated?):', line.substring(0, 100));
+    }
+  }
+  return messages;
 }

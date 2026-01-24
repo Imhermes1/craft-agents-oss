@@ -11,6 +11,7 @@ import {
   RotateCw,
   Flag,
   ListFilter,
+  Tag,
   Check,
   Search,
   Plus,
@@ -30,11 +31,11 @@ import { SourceAvatar } from "@/components/ui/source-avatar"
 import { AppMenu } from "../AppMenu"
 import { SquarePenRounded } from "../icons/SquarePenRounded"
 import { McpIcon } from "../icons/McpIcon"
-import { cn, isHexColor } from "@/lib/utils"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { HeaderIconButton } from "@/components/ui/HeaderIconButton"
 import { Separator } from "@/components/ui/separator"
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@craft-agent/ui"
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -61,7 +62,6 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher"
 import { SessionList } from "./SessionList"
 import { MainContentPanel } from "./MainContentPanel"
 import { LeftSidebar } from "./LeftSidebar"
-import { ModeToggle, type AppMode } from "./ModeToggle"
 import { useSession } from "@/hooks/useSession"
 import { ensureSessionMessagesLoadedAtom } from "@/atoms/sessions"
 import { AppShellProvider, type AppShellContextType } from "@/context/AppShellContext"
@@ -72,12 +72,18 @@ import { useFocusZone, useGlobalShortcuts } from "@/hooks/keyboard"
 import { useFocusContext } from "@/context/FocusContext"
 import { getSessionTitle } from "@/utils/session"
 import { useSetAtom } from "jotai"
-import type { Session, Workspace, FileAttachment, PermissionRequest, TodoState, LoadedSource, LoadedSkill, PermissionMode, SourceFilter } from "../../../shared/types"
+import type { Session, Workspace, FileAttachment, PermissionRequest, LoadedSource, LoadedSkill, PermissionMode, SourceFilter } from "../../../shared/types"
 import { sessionMetaMapAtom, type SessionMeta } from "@/atoms/sessions"
 import { sourcesAtom } from "@/atoms/sources"
 import { skillsAtom } from "@/atoms/skills"
-import { type TodoStateId, statusConfigsToTodoStates } from "@/config/todo-states"
+import { type TodoStateId, type TodoState, statusConfigsToTodoStates } from "@/config/todo-states"
 import { useStatuses } from "@/hooks/useStatuses"
+import { useLabels } from "@/hooks/useLabels"
+import { useViews } from "@/hooks/useViews"
+import { LabelIcon } from "@/components/ui/label-icon"
+import { buildLabelTree, getDescendantIds, getLabelDisplayName, flattenLabels, extractLabelId } from "@craft-agent/shared/labels"
+import type { LabelConfig, LabelTreeNode } from "@craft-agent/shared/labels"
+import { resolveEntityColor } from "@craft-agent/shared/colors"
 import * as storage from "@/lib/local-storage"
 import { toast } from "sonner"
 import { navigate, routes } from "@/lib/navigate"
@@ -85,7 +91,6 @@ import {
   useNavigation,
   useNavigationState,
   isChatsNavigation,
-  isChatNavigation,
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
@@ -96,12 +101,13 @@ import type { SettingsSubpage } from "../../../shared/types"
 import { SourcesListPanel } from "./SourcesListPanel"
 import { SkillsListPanel } from "./SkillsListPanel"
 import { PanelHeader } from "./PanelHeader"
-import { EditPopover, getEditConfig } from "@/components/ui/EditPopover"
+import { EditPopover, getEditConfig, type EditContextKey } from "@/components/ui/EditPopover"
 import { getDocUrl } from "@craft-agent/shared/docs/doc-links"
 import SettingsNavigator from "@/pages/settings/SettingsNavigator"
 import { RightSidebar } from "./RightSidebar"
 import type { RichTextInputHandle } from "@/components/ui/rich-text-input"
 import { hasOpenOverlay } from "@/lib/overlay-detection"
+import { clearSourceIconCaches } from "@/lib/icon-cache"
 
 /**
  * AppShellProps - Minimal props interface for AppShell component
@@ -210,12 +216,6 @@ function AppShellContent({
   // Window width tracking for responsive behavior
   const [windowWidth, setWindowWidth] = React.useState(window.innerWidth)
 
-  // App mode toggle (agent vs chat)
-  // Agent mode is default to preserve original app experience
-  const [appMode, setAppMode] = React.useState<AppMode>(() => {
-    return storage.get(storage.KEYS.appMode, 'agent') as AppMode
-  })
-
   // Calculate overlay threshold dynamically based on actual sidebar widths
   // Formula: 600px (300px right sidebar + 300px center) + leftSidebar + sessionList
   // This ensures we switch to overlay mode when inline right sidebar would compress content
@@ -232,8 +232,8 @@ function AppShellContent({
   const sessionListHandleRef = React.useRef<HTMLDivElement>(null)
   const rightSidebarHandleRef = React.useRef<HTMLDivElement>(null)
   const [session, setSession] = useSession()
-  const { resolvedMode } = useTheme()
-  const { canGoBack, canGoForward, goBack, goForward } = useNavigation()
+  const { resolvedMode, isDark } = useTheme()
+  const { canGoBack, canGoForward, goBack, goForward, navigateToSource } = useNavigation()
 
   // Double-Esc interrupt feature: first Esc shows warning, second Esc interrupts
   const { handleEscapePress } = useEscapeInterrupt()
@@ -242,12 +242,8 @@ function AppShellContent({
   // All sidebar/navigator/main panel state is derived from this
   const navState = useNavigationState()
 
-  // Derive chat filter from navigation state (for both agent mode and chat mode)
-  const chatFilter = isChatsNavigation(navState)
-    ? navState.filter
-    : isChatNavigation(navState)
-      ? { kind: 'allChats' as const } // Chat mode defaults to showing all chats
-      : null
+  // Derive chat filter from navigation state (only when in chats navigator)
+  const chatFilter = isChatsNavigation(navState) ? navState.filter : null
 
   // Derive source filter from navigation state (only when in sources navigator)
   const sourceFilter: SourceFilter | null = isSourcesNavigation(navState) ? navState.filter ?? null : null
@@ -277,9 +273,8 @@ function AppShellContent({
 
   // Auto-hide right sidebar when navigating away from chat sessions
   React.useEffect(() => {
-    // Hide sidebar if not in any chat view or no session selected
-    const isAnyChat = isChatsNavigation(navState) || isChatNavigation(navState)
-    if (!isAnyChat || !navState.details) {
+    // Hide sidebar if not in chat view or no session selected
+    if (!isChatsNavigation(navState) || !navState.details) {
       setSkipRightSidebarAnimation(true)
       setIsRightSidebarVisible(false)
       // Reset skip flag after state update
@@ -312,27 +307,14 @@ function AppShellContent({
     const saved = storage.get<string[]>(storage.KEYS.expandedFolders, [])
     return new Set(saved)
   })
-
-  // Sync expandedFolders to localStorage
-  React.useEffect(() => {
-    storage.set(storage.KEYS.expandedFolders, [...expandedFolders])
-  }, [expandedFolders])
-
-  const handleToggleFolder = React.useCallback((path: string) => {
-    setExpandedFolders(prev => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }, [])
-
   const [focusedSidebarItemId, setFocusedSidebarItemId] = React.useState<string | null>(null)
   const sidebarItemRefs = React.useRef<Map<string, HTMLElement>>(new Map())
-  // Track which expandable sidebar items are collapsed (default: all expanded)
+  // Track which expandable sidebar items are collapsed
+  // Labels are collapsed by default; user preference is persisted once toggled
   const [collapsedItems, setCollapsedItems] = React.useState<Set<string>>(() => {
-    const saved = storage.get<string[]>(storage.KEYS.collapsedSidebarItems, [])
-    return new Set(saved)
+    const saved = storage.get<string[] | null>(storage.KEYS.collapsedSidebarItems, null)
+    if (saved !== null) return new Set(saved)
+    return new Set(['nav:labels'])
   })
   const isExpanded = React.useCallback((id: string) => !collapsedItems.has(id), [collapsedItems])
   const toggleExpanded = React.useCallback((id: string) => {
@@ -345,241 +327,6 @@ function AppShellContent({
   }, [])
   // Sources state (workspace-scoped)
   const [sources, setSources] = React.useState<LoadedSource[]>([])
-
-  // Widgets State
-  const [reminders, setReminders] = React.useState<{ id: string; title: string; dueDate?: string; isOverdue?: boolean; completed?: boolean }[]>([])
-  const [starredDocs, setStarredDocs] = React.useState<{ id: string; title: string; updatedAt: string; url?: string }[]>([])
-  const [isRefreshingReminders, setIsRefreshingReminders] = React.useState(false)
-  const [isRefreshingStarred, setIsRefreshingStarred] = React.useState(false)
-
-  const fetchReminders = React.useCallback(async () => {
-    console.log('[Reminders] Fetching Apple Reminders using native AppleScript')
-    setIsRefreshingReminders(true)
-    try {
-      const response = await Promise.race([
-        window.electronAPI.getAppleReminders(),
-        new Promise<{ success: false; error: string }>((resolve) =>
-          setTimeout(() => resolve({ success: false, error: 'Timeout' }), 5000)
-        )
-      ])
-
-      console.log('[Reminders] AppleScript response:', response)
-
-      if (!response.success) {
-        console.error('[Reminders] AppleScript call failed:', response.error)
-        setReminders([])
-        return
-      }
-
-      if (!response.reminders || !Array.isArray(response.reminders)) {
-        console.log('[Reminders] No reminders in response')
-        setReminders([])
-        return
-      }
-
-      console.log('[Reminders] Raw reminders:', response.reminders)
-
-      const reminders = response.reminders.map((r: any) => ({
-        id: r.id || r.name || Math.random().toString(),
-        title: r.name || r.title || 'Untitled',
-        dueDate: r.dueDate || null,
-        isOverdue: r.dueDate ? new Date(r.dueDate) < new Date() : false,
-        completed: r.completed || false
-      }))
-
-      console.log('[Reminders] Mapped reminders:', reminders)
-      setReminders(reminders)
-    } catch (error) {
-      console.error('[Reminders] Failed to fetch reminders:', error)
-      setReminders([])
-    } finally {
-      setIsRefreshingReminders(false)
-    }
-  }, [])
-
-  const toggleReminder = React.useCallback(async (reminderId: string, title?: string) => {
-    try {
-      console.log('[Reminders] Completing reminder:', title || reminderId)
-
-      const response = await window.electronAPI.completeAppleReminder(title || reminderId)
-
-      if (!response.success) {
-        console.error('[Reminders] Failed to complete reminder:', response.error)
-        toast.error('Failed to complete reminder')
-        return
-      }
-
-      toast.success('Reminder completed')
-      fetchReminders()
-    } catch (error) {
-      console.error('[Reminders] Failed to complete reminder:', error)
-      toast.error('Failed to complete reminder')
-    }
-  }, [fetchReminders])
-
-  const fetchStarredDocs = React.useCallback(async () => {
-    if (!activeWorkspaceId) {
-      console.log('[Starred Docs] No active workspace ID')
-      return
-    }
-
-    console.log('[Starred Docs] Looking for Craft source in:', sources.map(s => ({
-      slug: s.config.slug,
-      provider: s.config.provider,
-      status: s.config.connectionStatus
-    })))
-
-    const source = sources.find(s => s.config.slug === 'craft-all-docs' || s.config.provider === 'craft')
-    if (!source) {
-      console.log('[Starred Docs] No Craft source found')
-      return
-    }
-
-    if (source.config.connectionStatus !== 'connected') {
-      console.log('[Starred Docs] Craft source not connected, status:', source.config.connectionStatus)
-      return
-    }
-
-    console.log('[Starred Docs] Fetching from source:', source.config.slug)
-    setIsRefreshingStarred(true)
-    try {
-      // Step 1: Get all folders/locations to find the Starred folder
-      console.log('[Starred Docs] Calling folders_list...')
-      const foldersResponse = await window.electronAPI.callMcpTool(activeWorkspaceId, source.config.slug, 'folders_list', {})
-
-      console.log('[Starred Docs] folders_list response:', foldersResponse)
-
-      if (!foldersResponse.success) {
-        console.error('[Starred Docs] folders_list failed:', foldersResponse.error)
-        return
-      }
-
-      // Parse folders response to find Starred location
-      const foldersResult = foldersResponse.result as any
-      let folders: any[] = []
-
-      if (Array.isArray(foldersResult)) {
-        folders = foldersResult
-      } else if (foldersResult.content && Array.isArray(foldersResult.content)) {
-        const firstContent = foldersResult.content[0]
-        if (firstContent && typeof firstContent.text === 'string') {
-          try {
-            const parsed = JSON.parse(firstContent.text)
-            folders = Array.isArray(parsed) ? parsed : [parsed]
-          } catch (err) {
-            console.error('[Starred Docs] Failed to parse folders JSON:', err)
-          }
-        }
-      }
-
-      console.log('[Starred Docs] Parsed folders:', folders)
-
-      // Find the Starred folder (might be called "Starred", "starred", or have a special ID)
-      const starredFolder = folders.find(f =>
-        (f.name && f.name.toLowerCase() === 'starred') ||
-        (f.label && f.label.toLowerCase() === 'starred') ||
-        (f.id && f.id.toLowerCase().includes('starred'))
-      )
-
-      if (!starredFolder) {
-        console.log('[Starred Docs] Starred folder not found in:', folders)
-        setStarredDocs([])
-        return
-      }
-
-      console.log('[Starred Docs] Found starred folder:', starredFolder)
-
-      // Step 2: Get documents in the Starred folder
-      console.log('[Starred Docs] Calling documents_list with folder:', starredFolder.id)
-      const response = await window.electronAPI.callMcpTool(activeWorkspaceId, source.config.slug, 'documents_list', {
-        folderId: starredFolder.id,
-        limit: 10
-      })
-
-      console.log('[Starred Docs] MCP response:', response)
-
-      if (!response.success) {
-        console.error('[Starred Docs] MCP call failed:', response.error)
-        return
-      }
-
-      if (!response.result) {
-        console.log('[Starred Docs] No result in response')
-        return
-      }
-
-      const result = response.result as any
-      console.log('[Starred Docs] Result type:', typeof result, 'Is array:', Array.isArray(result))
-      console.log('[Starred Docs] Result structure:', JSON.stringify(result, null, 2))
-
-      // MCP tool results typically have format: { content: [{ type: "text", text: "..." }] }
-      // But some tools might return data directly
-      let list: any[] = []
-
-      // Case 1: Result is already an array of documents
-      if (Array.isArray(result)) {
-        console.log('[Starred Docs] Result is array, using directly')
-        list = result
-      }
-      // Case 2: Result has content array (standard MCP format)
-      else if (result.content && Array.isArray(result.content)) {
-        console.log('[Starred Docs] Result has content array')
-        const firstContent = result.content[0]
-
-        // Check if content has text that needs to be parsed as JSON
-        if (firstContent && typeof firstContent.text === 'string') {
-          console.log('[Starred Docs] Found text content:', firstContent.text.substring(0, 200))
-          try {
-            const parsed = JSON.parse(firstContent.text)
-            list = Array.isArray(parsed) ? parsed : [parsed]
-            console.log('[Starred Docs] Successfully parsed JSON from text')
-          } catch (err) {
-            console.error('[Starred Docs] Failed to parse JSON:', err)
-            // If it's not JSON, treat the text as a single item
-            list = [{ title: firstContent.text }]
-          }
-        } else {
-          // Content doesn't have text, use content array as-is
-          console.log('[Starred Docs] Using content array as-is')
-          list = result.content
-        }
-      }
-      // Case 3: Result is a single object (wrap in array)
-      else if (typeof result === 'object') {
-        console.log('[Starred Docs] Result is object, wrapping in array')
-        list = [result]
-      }
-
-      console.log('[Starred Docs] Final list length:', list.length)
-      console.log('[Starred Docs] Final list:', JSON.stringify(list, null, 2))
-
-      if (Array.isArray(list) && list.length > 0) {
-        const docs = list.map((d: any) => ({
-          id: d.id || d.documentId || d.name || Math.random().toString(),
-          title: d.title || d.name || d.documentName || String(d),
-          updatedAt: d.updatedAt || d.modifiedAt || d.updated_at,
-          url: d.url || d.deeplink || d.webUrl
-        }))
-        console.log('[Starred Docs] Mapped docs:', docs)
-        setStarredDocs(docs)
-      } else {
-        console.log('[Starred Docs] No valid documents found in response')
-        setStarredDocs([])
-      }
-    } catch (error) {
-      console.error('[Starred Docs] Failed to fetch starred docs:', error)
-    } finally {
-      setIsRefreshingStarred(false)
-    }
-  }, [sources, activeWorkspaceId])
-
-  React.useEffect(() => {
-    if (appMode === 'chat') {
-      // TODO: Re-enable when AppleScript permissions are resolved
-      // fetchReminders()
-      fetchStarredDocs()
-    }
-  }, [appMode, fetchReminders, fetchStarredDocs])
   // Sync sources to atom for NavigationContext auto-selection
   const setSourcesAtom = useSetAtom(sourcesAtom)
   React.useEffect(() => {
@@ -628,6 +375,8 @@ function AppShellContent({
   // Subscribe to live source updates (when sources are added/removed dynamically)
   React.useEffect(() => {
     const cleanup = window.electronAPI.onSourcesChanged((updatedSources) => {
+      // Clear icon cache so updated source icons are re-fetched on render
+      clearSourceIconCaches()
       setSources(updatedSources || [])
     })
     return cleanup
@@ -661,21 +410,21 @@ function AppShellContent({
     }
   }, [])
 
+  // Handle session label changes (add/remove via # menu or badge X)
+  const handleSessionLabelsChange = React.useCallback(async (sessionId: string, labels: string[]) => {
+    try {
+      await window.electronAPI.sessionCommand(sessionId, { type: 'setLabels', labels })
+      // Session will emit a 'labels_changed' event that updates the session state
+    } catch (err) {
+      console.error('[Chat] Failed to set session labels:', err)
+    }
+  }, [])
+
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId)
 
   // Load dynamic statuses from workspace config
   const { statuses: statusConfigs, isLoading: isLoadingStatuses } = useStatuses(activeWorkspace?.id || null)
-  const [todoStates, setTodoStates] = React.useState<Array<{
-    id: string
-    label: string
-    color: string
-    icon: React.ReactNode
-    iconColorable: boolean
-    category?: 'open' | 'closed'
-    isFixed?: boolean
-    isDefault?: boolean
-    shortcut?: string
-  }>>([])
+  const [todoStates, setTodoStates] = React.useState<TodoState[]>([])
 
   // Convert StatusConfig to TodoState with resolved icons
   React.useEffect(() => {
@@ -684,17 +433,52 @@ function AppShellContent({
       return
     }
 
-    statusConfigsToTodoStates(statusConfigs, activeWorkspace.id).then(setTodoStates)
-  }, [statusConfigs, activeWorkspace?.id])
+    setTodoStates(statusConfigsToTodoStates(statusConfigs, activeWorkspace.id, isDark))
+  }, [statusConfigs, activeWorkspace?.id, isDark])
+
+  // Optimistic status order: immediately reflects drag-drop order while IPC propagates.
+  // Cleared when statusConfigs changes (config watcher is source of truth).
+  const [optimisticStatusOrder, setOptimisticStatusOrder] = React.useState<string[] | null>(null)
+
+  // Clear optimistic state when the config watcher fires (statusConfigs changes)
+  React.useEffect(() => {
+    setOptimisticStatusOrder(null)
+  }, [statusConfigs])
+
+  // Derive effective todo states: apply optimistic reorder if active, otherwise use canonical order
+  const effectiveTodoStates = React.useMemo(() => {
+    if (!optimisticStatusOrder) return todoStates
+    // Reorder todoStates array to match optimistic order
+    const stateMap = new Map(todoStates.map(s => [s.id, s]))
+    const reordered: TodoState[] = []
+    for (const id of optimisticStatusOrder) {
+      const state = stateMap.get(id)
+      if (state) reordered.push(state)
+    }
+    // Append any states not in the optimistic order (shouldn't happen, but defensive)
+    for (const state of todoStates) {
+      if (!optimisticStatusOrder.includes(state.id)) reordered.push(state)
+    }
+    return reordered
+  }, [todoStates, optimisticStatusOrder])
+
+  // Load labels from workspace config
+  const { labels: labelConfigs } = useLabels(activeWorkspace?.id || null)
+
+  // Views: compiled once on config load, evaluated per session in list/chat
+  const { evaluateSession: evaluateViews, viewConfigs } = useViews(activeWorkspace?.id || null)
+
+  // Build hierarchical label tree from nested config structure
+  const labelTree = useMemo(() => buildLabelTree(labelConfigs), [labelConfigs])
 
   // Ensure session messages are loaded when selected
   const ensureMessagesLoaded = useSetAtom(ensureSessionMessagesLoadedAtom)
 
-  // Handle selecting a source from the list
+  // Handle selecting a source from the list (preserves current filter type)
   const handleSourceSelect = React.useCallback((source: LoadedSource) => {
     if (!activeWorkspaceId) return
-    navigate(routes.view.sources({ sourceSlug: source.config.slug }))
-  }, [activeWorkspaceId, navigate])
+    navigateToSource(source.config.slug)
+  }, [activeWorkspaceId, navigateToSource])
 
   // Handle selecting a skill from the list
   const handleSkillSelect = React.useCallback((skill: LoadedSkill) => {
@@ -724,21 +508,19 @@ function AppShellContent({
       // Tab navigation between zones
       { key: 'Tab', action: focusNextZone, when: () => !document.querySelector('[role="dialog"]') },
       // Shift+Tab cycles permission mode through enabled modes (textarea handles its own, this handles when focus is elsewhere)
-      {
-        key: 'Tab', shift: true, action: () => {
-          if (session.selected) {
-            const currentOptions = contextValue.sessionOptions.get(session.selected)
-            const currentMode = currentOptions?.permissionMode ?? 'ask'
-            // Cycle through enabled permission modes
-            const modes = enabledModes.length >= 2 ? enabledModes : ['safe', 'ask', 'allow-all'] as PermissionMode[]
-            const currentIndex = modes.indexOf(currentMode)
-            // If current mode not in enabled list, jump to first enabled mode
-            const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % modes.length
-            const nextMode = modes[nextIndex]
-            contextValue.onSessionOptionsChange(session.selected, { permissionMode: nextMode })
-          }
-        }, when: () => !document.querySelector('[role="dialog"]') && document.activeElement?.tagName !== 'TEXTAREA'
-      },
+      { key: 'Tab', shift: true, action: () => {
+        if (session.selected) {
+          const currentOptions = contextValue.sessionOptions.get(session.selected)
+          const currentMode = currentOptions?.permissionMode ?? 'ask'
+          // Cycle through enabled permission modes
+          const modes = enabledModes.length >= 2 ? enabledModes : ['safe', 'ask', 'allow-all'] as PermissionMode[]
+          const currentIndex = modes.indexOf(currentMode)
+          // If current mode not in enabled list, jump to first enabled mode
+          const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % modes.length
+          const nextMode = modes[nextIndex]
+          contextValue.onSessionOptionsChange(session.selected, { permissionMode: nextMode })
+        }
+      }, when: () => !document.querySelector('[role="dialog"]') && document.activeElement?.tagName !== 'TEXTAREA' },
       // Sidebar toggle (CMD+\ like VS Code, avoids conflict with CMD+B for bold)
       { key: '\\', cmd: true, action: () => setIsSidebarVisible(v => !v) },
       // New chat
@@ -750,29 +532,27 @@ function AppShellContent({
       { key: ']', cmd: true, action: goForward },
       // ESC to stop processing - requires double-press within 1 second
       // First press shows warning overlay, second press interrupts
-      {
-        key: 'Escape', action: () => {
-          if (session.selected) {
-            const meta = sessionMetaMap.get(session.selected)
-            if (meta?.isProcessing) {
-              // handleEscapePress returns true on second press (within timeout)
-              const shouldInterrupt = handleEscapePress()
-              if (shouldInterrupt) {
-                window.electronAPI.cancelProcessing(session.selected, false).catch(err => {
-                  console.error('[AppShell] Failed to cancel processing:', err)
-                })
-              }
+      { key: 'Escape', action: () => {
+        if (session.selected) {
+          const meta = sessionMetaMap.get(session.selected)
+          if (meta?.isProcessing) {
+            // handleEscapePress returns true on second press (within timeout)
+            const shouldInterrupt = handleEscapePress()
+            if (shouldInterrupt) {
+              window.electronAPI.cancelProcessing(session.selected, false).catch(err => {
+                console.error('[AppShell] Failed to cancel processing:', err)
+              })
             }
           }
-        }, when: () => {
-          // Only active when no overlay is open and session is processing
-          // Overlays (dialogs, menus, popovers, etc.) should handle their own Escape
-          if (hasOpenOverlay()) return false
-          if (!session.selected) return false
-          const meta = sessionMetaMap.get(session.selected)
-          return meta?.isProcessing ?? false
         }
-      },
+      }, when: () => {
+        // Only active when no overlay is open and session is processing
+        // Overlays (dialogs, menus, popovers, etc.) should handle their own Escape
+        if (hasOpenOverlay()) return false
+        if (!session.selected) return false
+        const meta = sessionMetaMap.get(session.selected)
+        return meta?.isProcessing ?? false
+      }},
     ],
   })
 
@@ -887,40 +667,50 @@ function AppShellContent({
       : metas
   }, [sessionMetaMap, activeWorkspaceId])
 
-  // Separate sessions by runtime to keep Agent and Chat modes isolated.
-  const agentSessionMetas = useMemo(() => {
-    return workspaceSessionMetas.filter(s => (s.runtime ?? 'claude') === 'claude')
-  }, [workspaceSessionMetas])
-
-  const chatSessionMetas = useMemo(() => {
-    const filtered = workspaceSessionMetas.filter(s => s.runtime === 'openrouter-chat')
-    console.log('[Chat] Total workspace sessions:', workspaceSessionMetas.length)
-    console.log('[Chat] Filtered chat sessions:', filtered.length, filtered.map(s => ({ id: s.id, runtime: s.runtime, name: s.name })))
-    return filtered
-  }, [workspaceSessionMetas])
-
-  // Count sessions by todo state (scoped to workspace and mode)
+  // Count sessions by todo state (scoped to workspace)
   const isMetaDone = (s: SessionMeta) => s.todoState === 'done' || s.todoState === 'cancelled'
+  const flaggedCount = workspaceSessionMetas.filter(s => s.isFlagged).length
 
-  // Use appropriate session list based on app mode
-  const currentModeSessions = appMode === 'chat' ? chatSessionMetas : agentSessionMetas
-  const flaggedCount = currentModeSessions.filter(s => s.isFlagged).length
+  // Compute session counts per label (cumulative: parent includes descendants).
+  // Flatten the tree for iteration, use the tree for descendant lookups.
+  const labelCounts = useMemo(() => {
+    const allLabels = flattenLabels(labelConfigs)
+    const counts: Record<string, number> = {}
+    for (const label of allLabels) {
+      // Direct count: sessions explicitly tagged with this label (handles valued entries like "priority::3")
+      const directCount = workspaceSessionMetas.filter(
+        s => s.labels?.some(l => extractLabelId(l) === label.id)
+      ).length
+      counts[label.id] = directCount
+    }
+    // Add descendant counts to parents (cumulative)
+    for (const label of allLabels) {
+      const descendants = getDescendantIds(labelConfigs, label.id)
+      if (descendants.length > 0) {
+        const descendantCount = workspaceSessionMetas.filter(
+          s => s.labels?.some(l => descendants.includes(extractLabelId(l)))
+        ).length
+        counts[label.id] = (counts[label.id] || 0) + descendantCount
+      }
+    }
+    return counts
+  }, [workspaceSessionMetas, labelConfigs])
 
-  // Count sessions by individual todo state (dynamic based on todoStates)
+  // Count sessions by individual todo state (dynamic based on effectiveTodoStates)
   const todoStateCounts = useMemo(() => {
     const counts: Record<TodoStateId, number> = {}
     // Initialize counts for all dynamic statuses
-    for (const state of todoStates) {
+    for (const state of effectiveTodoStates) {
       counts[state.id] = 0
     }
     // Count sessions
-    for (const s of currentModeSessions) {
+    for (const s of workspaceSessionMetas) {
       const state = (s.todoState || 'todo') as TodoStateId
-      // Increment count (initialize to 0 if status not in todoStates yet)
+      // Increment count (initialize to 0 if status not in effectiveTodoStates yet)
       counts[state] = (counts[state] || 0) + 1
     }
     return counts
-  }, [currentModeSessions, todoStates])
+  }, [workspaceSessionMetas, effectiveTodoStates])
 
   // Count sources by type for the Sources dropdown subcategories
   const sourceTypeCounts = useMemo(() => {
@@ -945,18 +735,44 @@ function AppShellContent({
 
     switch (chatFilter.kind) {
       case 'allChats':
-        // "All Chats" - shows all sessions for current mode
-        result = currentModeSessions
+        // "All Chats" - shows all sessions
+        result = workspaceSessionMetas
         break
       case 'flagged':
-        result = currentModeSessions.filter(s => s.isFlagged)
+        result = workspaceSessionMetas.filter(s => s.isFlagged)
         break
       case 'state':
         // Filter by specific todo state
-        result = currentModeSessions.filter(s => (s.todoState || 'todo') === chatFilter.stateId)
+        result = workspaceSessionMetas.filter(s => (s.todoState || 'todo') === chatFilter.stateId)
         break
+      case 'label': {
+        if (chatFilter.labelId === '__all__') {
+          // "Labels" header: show all sessions that have at least one label
+          result = workspaceSessionMetas.filter(s => s.labels && s.labels.length > 0)
+        } else {
+          // Specific label: includes sessions tagged with this label or any descendant
+          const descendants = getDescendantIds(labelConfigs, chatFilter.labelId)
+          const matchIds = new Set([chatFilter.labelId, ...descendants])
+          result = workspaceSessionMetas.filter(
+            s => s.labels?.some(l => matchIds.has(extractLabelId(l)))
+          )
+        }
+        break
+      }
+      case 'view': {
+        // Filter by view: __all__ shows any session matched by any view,
+        // otherwise filter to the specific view
+        result = workspaceSessionMetas.filter(s => {
+          const matched = evaluateViews(s)
+          if (chatFilter.viewId === '__all__') {
+            return matched.length > 0
+          }
+          return matched.some(v => v.id === chatFilter.viewId)
+        })
+        break
+      }
       default:
-        result = currentModeSessions
+        result = workspaceSessionMetas
     }
 
     // Apply secondary filter by todo states if any are selected (only in allChats view)
@@ -965,7 +781,7 @@ function AppShellContent({
     }
 
     return result
-  }, [currentModeSessions, chatFilter, listFilter])
+  }, [workspaceSessionMetas, chatFilter, listFilter, labelConfigs])
 
   // Ensure session messages are loaded when selected
   React.useEffect(() => {
@@ -1019,18 +835,20 @@ function AppShellContent({
     )
   }, [isFocusedMode, isRightSidebarVisible])
 
-  // Extend context value with local overrides (textareaRef, wrapped onDeleteSession, sources, skills, enabledModes, rightSidebarOpenButton, todoStates)
+  // Extend context value with local overrides (textareaRef, wrapped onDeleteSession, sources, skills, labels, enabledModes, rightSidebarOpenButton, effectiveTodoStates)
   const appShellContextValue = React.useMemo<AppShellContextType>(() => ({
     ...contextValue,
     onDeleteSession: handleDeleteSession,
     textareaRef: chatInputRef,
     enabledSources: sources,
     skills,
+    labels: labelConfigs,
+    onSessionLabelsChange: handleSessionLabelsChange,
     enabledModes,
-    todoStates,
+    todoStates: effectiveTodoStates,
     onSessionSourcesChange: handleSessionSourcesChange,
     rightSidebarButton: rightSidebarOpenButton,
-  }), [contextValue, handleDeleteSession, sources, skills, enabledModes, todoStates, handleSessionSourcesChange, rightSidebarOpenButton])
+  }), [contextValue, handleDeleteSession, sources, skills, labelConfigs, handleSessionLabelsChange, enabledModes, effectiveTodoStates, handleSessionSourcesChange, rightSidebarOpenButton])
 
   // Persist expanded folders to localStorage
   React.useEffect(() => {
@@ -1057,52 +875,35 @@ function AppShellContent({
     storage.set(storage.KEYS.collapsedSidebarItems, [...collapsedItems])
   }, [collapsedItems])
 
-  // Persist app mode to localStorage
-  React.useEffect(() => {
-    storage.set(storage.KEYS.appMode, appMode)
-  }, [appMode])
-
-  // Handle mode change - navigate to appropriate view
-  const handleModeChange = useCallback((mode: AppMode) => {
-    setAppMode(mode)
-    if (mode === 'chat') {
-      // Navigate to chat navigator (OpenRouter chat mode)
-      const lastChatSessionId = storage.get<string | null>(storage.KEYS.lastChatSessionId, null)
-      navigate(lastChatSessionId ? routes.view.chat(lastChatSessionId) : routes.view.chat())
-    } else {
-      // Navigate to agent mode (chats navigator)
-      const lastAgentSessionId = storage.get<string | null>(storage.KEYS.lastAgentSessionId, null)
-      navigate(lastAgentSessionId ? routes.view.allChats(lastAgentSessionId) : routes.view.allChats())
-    }
-  }, [navigate])
-
   const handleAllChatsClick = useCallback(() => {
-    // Navigate to appropriate route based on mode
-    if (appMode === 'chat') {
-      navigate(routes.view.chat())
-    } else {
-      navigate(routes.view.allChats())
-    }
-  }, [appMode, navigate])
+    navigate(routes.view.allChats())
+  }, [])
 
   const handleFlaggedClick = useCallback(() => {
-    // Navigate to appropriate route based on mode
-    if (appMode === 'chat') {
-      navigate(routes.view.chat())
-    } else {
-      navigate(routes.view.flagged())
-    }
-  }, [appMode, navigate])
+    navigate(routes.view.flagged())
+  }, [])
 
   // Handler for individual todo state views
   const handleTodoStateClick = useCallback((stateId: TodoStateId) => {
-    // Navigate to appropriate route based on mode
-    if (appMode === 'chat') {
-      navigate(routes.view.chat())
-    } else {
-      navigate(routes.view.state(stateId))
-    }
-  }, [appMode, navigate])
+    navigate(routes.view.state(stateId))
+  }, [])
+
+  // Handler for label filter views (hierarchical — includes descendant labels)
+  const handleLabelClick = useCallback((labelId: string) => {
+    navigate(routes.view.label(labelId))
+  }, [])
+
+  const handleViewClick = useCallback((viewId: string) => {
+    navigate(routes.view.view(viewId))
+  }, [])
+
+  // DnD handler: reorder statuses (flat list drag-and-drop)
+  // Sets optimistic order immediately for instant UI feedback, then fires IPC.
+  const handleStatusReorder = useCallback((orderedIds: string[]) => {
+    if (!activeWorkspaceId) return
+    setOptimisticStatusOrder(orderedIds)
+    window.electronAPI.reorderStatuses(activeWorkspaceId, orderedIds)
+  }, [activeWorkspaceId])
 
   // Handler for sources view (all sources)
   const handleSourcesClick = useCallback(() => {
@@ -1139,63 +940,120 @@ function AppShellContent({
   // We use controlled popovers instead of deep links so the user can type
   // their request in the popover UI before opening a new chat window.
   // add-source variants: add-source (generic), add-source-api, add-source-mcp, add-source-local
-  const [editPopoverOpen, setEditPopoverOpen] = useState<'statuses' | 'add-source' | 'add-source-api' | 'add-source-mcp' | 'add-source-local' | 'add-skill' | null>(null)
+  const [editPopoverOpen, setEditPopoverOpen] = useState<'statuses' | 'labels' | 'views' | 'add-source' | 'add-source-api' | 'add-source-mcp' | 'add-source-local' | 'add-skill' | 'add-label' | null>(null)
+
+  // Stores the Y position of the last right-clicked sidebar item so the EditPopover
+  // appears near it rather than at a fixed location. Updated synchronously before
+  // the setTimeout that opens the popover, ensuring the ref is set before render.
+  const editPopoverAnchorY = useRef<number>(120)
+
+  // Stores the trigger element (button) so we can keep it highlighted while the
+  // EditPopover is open (after Radix removes data-state="open" on context menu close).
+  const editPopoverTriggerRef = useRef<Element | null>(null)
+
+  // Captures the bounding rect of the currently-open context menu trigger (the button).
+  // Radix sets data-state="open" on the button (via ContextMenuTrigger asChild)
+  // while the menu is visible, so we can locate it in the DOM at click time.
+  const captureContextMenuPosition = useCallback(() => {
+    const trigger = document.querySelector('.group\\/section > [data-state="open"]')
+    if (trigger) {
+      const rect = trigger.getBoundingClientRect()
+      editPopoverAnchorY.current = rect.top
+      editPopoverTriggerRef.current = trigger
+    }
+  }, [])
+
+  // Sync data-edit-active attribute on the trigger element with EditPopover open state.
+  // This keeps the sidebar item visually highlighted while the popover is shown,
+  // since Radix's data-state="open" disappears when the context menu closes.
+  useEffect(() => {
+    const el = editPopoverTriggerRef.current
+    if (!el) return
+    if (editPopoverOpen) {
+      el.setAttribute('data-edit-active', 'true')
+    } else {
+      el.removeAttribute('data-edit-active')
+      editPopoverTriggerRef.current = null
+    }
+  }, [editPopoverOpen])
 
   // Handler for "Configure Statuses" context menu action
   // Opens the EditPopover for status configuration
   // Uses setTimeout to delay opening until after context menu closes,
   // preventing the popover from immediately closing due to focus shift
   const openConfigureStatuses = useCallback(() => {
+    captureContextMenuPosition()
     setTimeout(() => setEditPopoverOpen('statuses'), 50)
-  }, [])
+  }, [captureContextMenuPosition])
+
+  // Handler for "Configure Labels" context menu action
+  // Opens the EditPopover for label configuration
+  const openConfigureLabels = useCallback(() => {
+    captureContextMenuPosition()
+    setTimeout(() => setEditPopoverOpen('labels'), 50)
+  }, [captureContextMenuPosition])
+
+  // Handler for "Edit Views" context menu action
+  // Opens the EditPopover for view configuration
+  const openConfigureViews = useCallback(() => {
+    captureContextMenuPosition()
+    setTimeout(() => setEditPopoverOpen('views'), 50)
+  }, [captureContextMenuPosition])
+
+  // Handler for "Delete View" context menu action
+  // Removes the view from config by filtering it out and saving
+  const handleDeleteView = useCallback(async (viewId: string) => {
+    if (!activeWorkspace?.id) return
+    try {
+      const updated = viewConfigs.filter(v => v.id !== viewId)
+      await window.electronAPI.saveViews(activeWorkspace.id, updated)
+    } catch (err) {
+      console.error('[AppShell] Failed to delete view:', err)
+    }
+  }, [activeWorkspace?.id, viewConfigs])
+
+  // Handler for "Add New Label" context menu action
+  // Opens the EditPopover with 'add-label' context so the user can describe the label
+  const handleAddLabel = useCallback((_parentId?: string) => {
+    captureContextMenuPosition()
+    setTimeout(() => setEditPopoverOpen('add-label'), 50)
+  }, [captureContextMenuPosition])
+
+  // Handler for "Delete Label" context menu action
+  // Deletes the label and all its descendants, stripping from sessions
+  const handleDeleteLabel = useCallback(async (labelId: string) => {
+    if (!activeWorkspace?.id) return
+    try {
+      await window.electronAPI.deleteLabel(activeWorkspace.id, labelId)
+    } catch (err) {
+      console.error('[AppShell] Failed to delete label:', err)
+    }
+  }, [activeWorkspace?.id])
 
   // Handler for "Add Source" context menu action
   // Opens the EditPopover for adding a new source
   // Optional sourceType param allows filter-aware context (from subcategory menus or filtered views)
   const openAddSource = useCallback((sourceType?: 'api' | 'mcp' | 'local') => {
+    captureContextMenuPosition()
     const key = sourceType ? `add-source-${sourceType}` as const : 'add-source' as const
     setTimeout(() => setEditPopoverOpen(key), 50)
-  }, [])
+  }, [captureContextMenuPosition])
 
   // Handler for "Add Skill" context menu action
   // Opens the EditPopover for adding a new skill
   const openAddSkill = useCallback(() => {
+    captureContextMenuPosition()
     setTimeout(() => setEditPopoverOpen('add-skill'), 50)
-  }, [])
+  }, [captureContextMenuPosition])
 
   // Create a new chat and select it
-  const createAndNavigateChatSession = useCallback(async () => {
-    if (!activeWorkspace) {
-      console.log('[Chat] No active workspace')
-      return
-    }
-    console.log('[Chat] Creating new chat session for workspace:', activeWorkspace.id)
-    const model = storage.get<string>(storage.KEYS.openrouterLastModel, 'openai/gpt-4o-mini')
-    console.log('[Chat] Using model:', model)
-    const newSession = await window.electronAPI.createSession(activeWorkspace.id, {
-      runtime: 'openrouter-chat',
-      model,
-    })
-    console.log('[Chat] Created session:', newSession.id, 'Runtime:', newSession.runtime)
-    storage.set(storage.KEYS.lastChatSessionId, newSession.id)
-    navigate(routes.view.chat(newSession.id))
-  }, [activeWorkspace, navigate])
-
-  const createAndNavigateAgentSession = useCallback(async () => {
-    if (!activeWorkspace) return
-    const newSession = await onCreateSession(activeWorkspace.id)
-    storage.set(storage.KEYS.lastAgentSessionId, newSession.id)
-    navigate(routes.view.allChats(newSession.id))
-  }, [activeWorkspace, onCreateSession, navigate])
-
-  // Create a new chat and select it (respects current mode)
   const handleNewChat = useCallback(async (_useCurrentAgent: boolean = true) => {
-    if (appMode === 'chat') {
-      await createAndNavigateChatSession()
-      return
-    }
-    await createAndNavigateAgentSession()
-  }, [appMode, createAndNavigateChatSession, createAndNavigateAgentSession])
+    if (!activeWorkspace) return
+
+    const newSession = await onCreateSession(activeWorkspace.id)
+    // Navigate to the new session via central routing
+    navigate(routes.view.allChats(newSession.id))
+  }, [activeWorkspace, onCreateSession])
 
   // Delete Source - simplified since agents system is removed
   const handleDeleteSource = useCallback(async (sourceSlug: string) => {
@@ -1240,29 +1098,47 @@ function AppShellContent({
   const unifiedSidebarItems = React.useMemo((): SidebarItem[] => {
     const result: SidebarItem[] = []
 
-    if (appMode === 'chat') {
-      result.push({ id: 'nav:chat', type: 'nav', action: () => navigate(routes.view.chat()) })
-    } else {
-      // Agent mode nav items (All Chats, Flagged, Statuses)
-      result.push({ id: 'nav:allChats', type: 'nav', action: handleAllChatsClick })
-      result.push({ id: 'nav:flagged', type: 'nav', action: handleFlaggedClick })
-      for (const state of todoStates) {
-        result.push({ id: `nav:state:${state.id}`, type: 'nav', action: () => handleTodoStateClick(state.id) })
-      }
+    // 1. Chats section: All Chats, Flagged, States header, States items
+    result.push({ id: 'nav:allChats', type: 'nav', action: handleAllChatsClick })
+    result.push({ id: 'nav:flagged', type: 'nav', action: handleFlaggedClick })
+    result.push({ id: 'nav:states', type: 'nav', action: handleAllChatsClick })
+    for (const state of effectiveTodoStates) {
+      result.push({ id: `nav:state:${state.id}`, type: 'nav', action: () => handleTodoStateClick(state.id) })
     }
 
-    // Sources nav item
+    // 2. Labels section header + regular label tree for keyboard nav
+    result.push({ id: 'nav:labels', type: 'nav', action: handleAllChatsClick })
+    // Flatten regular label tree for keyboard navigation (depth-first)
+    const flattenTree = (nodes: LabelTreeNode[]) => {
+      for (const node of nodes) {
+        if (node.label) {
+          result.push({ id: `nav:label:${node.fullId}`, type: 'nav', action: () => handleLabelClick(node.fullId) })
+        }
+        if (node.children.length > 0) flattenTree(node.children)
+      }
+    }
+    flattenTree(labelTree)
+
+    // 3. Sources, Skills, Settings
     result.push({ id: 'nav:sources', type: 'nav', action: handleSourcesClick })
-
-    // 2.6. Skills nav item
     result.push({ id: 'nav:skills', type: 'nav', action: handleSkillsClick })
-
-    // 2.7. Settings nav item
     result.push({ id: 'nav:settings', type: 'nav', action: () => handleSettingsClick('app') })
 
     return result
-  }, [appMode, handleAllChatsClick, handleFlaggedClick, handleTodoStateClick, todoStates, handleSourcesClick, handleSkillsClick, handleSettingsClick])
+  }, [handleAllChatsClick, handleFlaggedClick, handleTodoStateClick, effectiveTodoStates, handleLabelClick, labelConfigs, labelTree, viewConfigs, handleViewClick, handleSourcesClick, handleSkillsClick, handleSettingsClick])
 
+  // Toggle folder expanded state
+  const handleToggleFolder = React.useCallback((path: string) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) {
+        next.delete(path)
+      } else {
+        next.add(path)
+      }
+      return next
+    })
+  }, [])
 
   // Get props for any sidebar item (unified roving tabindex pattern)
   const getSidebarItemProps = React.useCallback((id: string) => ({
@@ -1371,23 +1247,75 @@ function AppShellContent({
     // Settings navigator
     if (isSettingsNavigation(navState)) return 'Settings'
 
-    // Chat navigator (OpenRouter mode)
-    // Chat navigator (OpenRouter mode)
-    if (isChatNavigation(navState)) return 'Chats'
-
     // Chats navigator - use chatFilter
     if (!chatFilter) return 'All Chats'
 
     switch (chatFilter.kind) {
       case 'flagged':
         return 'Flagged'
-      case 'state':
-        const state = todoStates.find(s => s.id === chatFilter.stateId)
+      case 'state': {
+        const state = effectiveTodoStates.find(s => s.id === chatFilter.stateId)
         return state?.label || 'All Chats'
+      }
+      case 'label':
+        return chatFilter.labelId === '__all__' ? 'Labels' : getLabelDisplayName(labelConfigs, chatFilter.labelId)
+      case 'view':
+        return chatFilter.viewId === '__all__' ? 'Views' : viewConfigs.find(v => v.id === chatFilter.viewId)?.name || 'Views'
       default:
         return 'All Chats'
     }
-  }, [navState, chatFilter, todoStates])
+  }, [navState, chatFilter, effectiveTodoStates, labelConfigs, viewConfigs])
+
+  // Build recursive sidebar items from label tree.
+  // Each node renders with condensed height (compact: true) since many labels expected.
+  // Clicking any label navigates to its filter view; the chevron toggles expand/collapse.
+  const buildLabelSidebarItems = useCallback((nodes: LabelTreeNode[]): any[] => {
+    // Sort labels alphabetically by display name at every level (parent + children)
+    const sorted = [...nodes].sort((a, b) => {
+      const nameA = (a.label?.name || a.segment).toLowerCase()
+      const nameB = (b.label?.name || b.segment).toLowerCase()
+      return nameA.localeCompare(nameB)
+    })
+    return sorted.map(node => {
+      const hasChildren = node.children.length > 0
+      const isActive = chatFilter?.kind === 'label' && chatFilter.labelId === node.fullId
+      const count = labelCounts[node.fullId] || 0
+
+      const item: any = {
+        id: `nav:label:${node.fullId}`,
+        title: node.label?.name || node.segment.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+        label: count > 0 ? String(count) : undefined,
+        icon: node.label && activeWorkspace?.id ? (
+          <LabelIcon
+            label={node.label}
+            size="sm"
+            hasChildren={hasChildren}
+          />
+        ) : <Tag className="h-3.5 w-3.5" />,
+        variant: isActive ? "default" : "ghost",
+        compact: true, // Reduced height for label items (many labels expected)
+        // All labels navigate on click — parent and leaf alike
+        onClick: () => handleLabelClick(node.fullId),
+        contextMenu: {
+          type: 'labels' as const,
+          labelId: node.fullId,
+          onConfigureLabels: openConfigureLabels,
+          onAddLabel: handleAddLabel,
+          onDeleteLabel: handleDeleteLabel,
+        },
+      }
+
+      if (hasChildren) {
+        item.expandable = true
+        item.expanded = isExpanded(`nav:label:${node.fullId}`)
+        // Chevron toggles expand/collapse independently of navigation
+        item.onToggle = () => toggleExpanded(`nav:label:${node.fullId}`)
+        item.items = buildLabelSidebarItems(node.children)
+      }
+
+      return item
+    })
+  }, [chatFilter, labelCounts, activeWorkspace?.id, handleLabelClick, isExpanded, toggleExpanded, openConfigureLabels, handleAddLabel, handleDeleteLabel])
 
   return (
     <AppShellProvider value={appShellContextValue}>
@@ -1401,856 +1329,759 @@ function AppShellContent({
         */}
         <div className="titlebar-drag-region fixed top-0 left-0 right-0 h-[50px] z-titlebar" />
 
-        {/* App Menu - fixed position, always visible (hidden in focused mode) */}
-        {!isFocusedMode && (
-          <div
-            className="fixed left-[86px] top-0 h-[50px] z-overlay flex items-center titlebar-no-drag pr-2"
-            style={{ width: sidebarWidth - 86 }}
-          >
-            <AppMenu
-              onNewChat={() => handleNewChat(true)}
-              onOpenSettings={onOpenSettings}
-              onOpenKeyboardShortcuts={onOpenKeyboardShortcuts}
-              onOpenStoredUserPreferences={onOpenStoredUserPreferences}
-              onReset={onReset}
-              onBack={goBack}
-              onForward={goForward}
-              canGoBack={canGoBack}
-              canGoForward={canGoForward}
-              onToggleSidebar={() => setIsSidebarVisible(prev => !prev)}
-              isSidebarVisible={isSidebarVisible}
-            />
-          </div>
-        )}
+      {/* App Menu - fixed position, always visible (hidden in focused mode) */}
+      {!isFocusedMode && (
+        <div
+          className="fixed left-[86px] top-0 h-[50px] z-overlay flex items-center titlebar-no-drag pr-2"
+          style={{ width: sidebarWidth - 86 }}
+        >
+          <AppMenu
+            onNewChat={() => handleNewChat(true)}
+            onOpenSettings={onOpenSettings}
+            onOpenKeyboardShortcuts={onOpenKeyboardShortcuts}
+            onOpenStoredUserPreferences={onOpenStoredUserPreferences}
+            onReset={onReset}
+            onBack={goBack}
+            onForward={goForward}
+            canGoBack={canGoBack}
+            canGoForward={canGoForward}
+            onToggleSidebar={() => setIsSidebarVisible(prev => !prev)}
+            isSidebarVisible={isSidebarVisible}
+          />
+        </div>
+      )}
 
-        {/* === OUTER LAYOUT: Sidebar | Main Content === */}
-        <div className="h-full flex items-stretch relative">
-          {/* === SIDEBAR (Left) === (hidden in focused mode)
+      {/* === OUTER LAYOUT: Sidebar | Main Content === */}
+      <div className="h-full flex items-stretch relative">
+        {/* === SIDEBAR (Left) === (hidden in focused mode)
             Animated width with spring physics for smooth 60-120fps transitions.
             Uses overflow-hidden to clip content during collapse animation.
             Resizable via drag handle on right edge (200-400px range). */}
-          {!isFocusedMode && (
-            <motion.div
-              initial={false}
-              animate={{ width: isSidebarVisible ? sidebarWidth : 0 }}
-              transition={isResizing ? { duration: 0 } : springTransition}
-              className="h-full overflow-hidden shrink-0 relative"
-            >
-              <div
-                ref={sidebarRef}
-                style={{ width: sidebarWidth }}
-                className="h-full font-sans relative"
-                data-focus-zone="sidebar"
-                tabIndex={sidebarFocused ? 0 : -1}
-                onKeyDown={handleSidebarKeyDown}
-              >
-                <div className="flex h-full flex-col pt-[50px] select-none">
-                  {/* Sidebar Top Section */}
-                  <div className="flex-1 flex flex-col min-h-0">
-                    {/* Mode Toggle - Agent vs Chat */}
-                    <div className="px-2 pt-1 pb-1 relative z-panel titlebar-no-drag">
-                      <ModeToggle
-                        value={appMode}
-                        onChange={handleModeChange}
-                        className="w-full"
-                      />
-                    </div>
-                    {/* New Chat Button - Gmail-style, with context menu for "Open in New Window" */}
-                    <div className="px-2 pt-1 pb-2">
-                      <ContextMenu modal={true}>
-                        <ContextMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            onClick={() => handleNewChat(true)}
-                            className="w-full justify-start gap-2 py-[7px] px-2 text-[13px] font-normal rounded-[6px] shadow-minimal bg-background"
-                            data-tutorial="new-chat-button"
-                          >
-                            <SquarePenRounded className="h-3.5 w-3.5 shrink-0" />
-                            New Chat
-                          </Button>
-                        </ContextMenuTrigger>
-                        <StyledContextMenuContent>
-                          <ContextMenuProvider>
-                            <SidebarMenu type="newChat" />
-                          </ContextMenuProvider>
-                        </StyledContextMenuContent>
-                      </ContextMenu>
-                    </div>
-                    {/* Primary Nav: All Chats (with expandable submenu), Sources */}
-                    <LeftSidebar
-                      isCollapsed={false}
-                      getItemProps={getSidebarItemProps}
-                      focusedItemId={focusedSidebarItemId}
-                      links={appMode === 'chat' ? [
-                        {
-                          id: "nav:allChats",
-                          title: "All Chats",
-                          label: String(chatSessionMetas.length),
-                          icon: Inbox,
-                          variant: chatFilter?.kind === 'allChats' ? "default" : "ghost",
-                          onClick: handleAllChatsClick,
-                          expandable: true,
-                          expanded: isExpanded('nav:allChats'),
-                          onToggle: () => toggleExpanded('nav:allChats'),
-                          contextMenu: {
-                            type: 'allChats',
-                            onConfigureStatuses: openConfigureStatuses,
-                          },
-                          items: [
-                            ...todoStates.map(state => ({
-                              id: `nav:state:${state.id}`,
-                              title: state.label,
-                              label: String(todoStateCounts[state.id] || 0),
-                              icon: state.icon,
-                              iconColor: state.color,
-                              iconColorable: state.iconColorable,
-                              variant: (chatFilter?.kind === 'state' && chatFilter.stateId === state.id ? "default" : "ghost") as "default" | "ghost",
-                              onClick: () => handleTodoStateClick(state.id),
-                              contextMenu: {
-                                type: 'status' as const,
-                                statusId: state.id,
-                                onConfigureStatuses: openConfigureStatuses,
-                              },
-                            })),
-                            { id: "separator:before-flagged", type: "separator" },
-                            {
-                              id: "nav:flagged",
-                              title: "Flagged",
-                              label: String(flaggedCount),
-                              icon: <Flag className="h-3.5 w-3.5 fill-current" />,
-                              iconColor: "text-info",
-                              variant: chatFilter?.kind === 'flagged' ? "default" : "ghost",
-                              onClick: handleFlaggedClick,
-                              contextMenu: {
-                                type: 'flagged' as const,
-                                onConfigureStatuses: openConfigureStatuses,
-                              },
-                            },
-                          ],
+        {!isFocusedMode && (
+        <motion.div
+          initial={false}
+          animate={{ width: isSidebarVisible ? sidebarWidth : 0 }}
+          transition={isResizing ? { duration: 0 } : springTransition}
+          className="h-full overflow-hidden shrink-0 relative"
+        >
+          <div
+            ref={sidebarRef}
+            style={{ width: sidebarWidth }}
+            className="h-full font-sans relative"
+            data-focus-zone="sidebar"
+            tabIndex={sidebarFocused ? 0 : -1}
+            onKeyDown={handleSidebarKeyDown}
+          >
+            <div className="flex h-full flex-col pt-[50px] select-none">
+              {/* Sidebar Top Section */}
+              <div className="flex-1 flex flex-col min-h-0">
+                {/* New Chat Button - Gmail-style, with context menu for "Open in New Window" */}
+                <div className="px-2 pt-1 pb-2 shrink-0">
+                  <ContextMenu modal={true}>
+                    <ContextMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        onClick={() => handleNewChat(true)}
+                        className="w-full justify-start gap-2 py-[7px] px-2 text-[13px] font-normal rounded-[6px] shadow-minimal bg-background"
+                        data-tutorial="new-chat-button"
+                      >
+                        <SquarePenRounded className="h-3.5 w-3.5 shrink-0" />
+                        New Chat
+                      </Button>
+                    </ContextMenuTrigger>
+                    <StyledContextMenuContent>
+                      <ContextMenuProvider>
+                        <SidebarMenu type="newChat" />
+                      </ContextMenuProvider>
+                    </StyledContextMenuContent>
+                  </ContextMenu>
+                </div>
+                {/* Primary Nav: All Chats, Flagged, States, Labels | Sources, Skills | Settings */}
+                <div className="flex-1 overflow-y-auto min-h-0 mask-fade-bottom">
+                <LeftSidebar
+                  isCollapsed={false}
+                  getItemProps={getSidebarItemProps}
+                  focusedItemId={focusedSidebarItemId}
+                  links={[
+                    // --- Chats Section ---
+                    {
+                      id: "nav:allChats",
+                      title: "All Chats",
+                      label: String(workspaceSessionMetas.length),
+                      icon: Inbox,
+                      variant: chatFilter?.kind === 'allChats' ? "default" : "ghost",
+                      onClick: handleAllChatsClick,
+                    },
+                    {
+                      id: "nav:flagged",
+                      title: "Flagged",
+                      label: String(flaggedCount),
+                      icon: <Flag className="h-3.5 w-3.5" />,
+                      variant: chatFilter?.kind === 'flagged' ? "default" : "ghost",
+                      onClick: handleFlaggedClick,
+                    },
+                    // States: expandable section with status sub-items (drag-and-drop reorder)
+                    {
+                      id: "nav:states",
+                      title: "Status",
+                      icon: CheckCircle2,
+                      variant: "ghost",
+                      onClick: () => toggleExpanded('nav:states'),
+                      expandable: true,
+                      expanded: isExpanded('nav:states'),
+                      onToggle: () => toggleExpanded('nav:states'),
+                      contextMenu: {
+                        type: 'allChats',
+                        onConfigureStatuses: openConfigureStatuses,
+                      },
+                      // Enable flat DnD reorder for status items
+                      sortable: { onReorder: handleStatusReorder },
+                      items: effectiveTodoStates.map(state => ({
+                        id: `nav:state:${state.id}`,
+                        title: state.label,
+                        label: String(todoStateCounts[state.id] || 0),
+                        icon: state.icon,
+                        iconColor: state.resolvedColor,
+                        iconColorable: state.iconColorable,
+                        variant: (chatFilter?.kind === 'state' && chatFilter.stateId === state.id ? "default" : "ghost") as "default" | "ghost",
+                        onClick: () => handleTodoStateClick(state.id),
+                        contextMenu: {
+                          type: 'status' as const,
+                          statusId: state.id,
+                          onConfigureStatuses: openConfigureStatuses,
                         },
+                      })),
+                    },
+                    // Labels: navigable header (shows all labeled sessions) + hierarchical tree (drag-and-drop reorder + re-parent)
+                    {
+                      id: "nav:labels",
+                      title: "Labels",
+                      icon: Tag,
+                      // Only highlighted when "Labels" itself is selected (not sub-labels)
+                      variant: (chatFilter?.kind === 'label' && chatFilter.labelId === '__all__') ? "default" as const : "ghost" as const,
+                      // Clicking navigates to "all labeled sessions" view
+                      onClick: () => handleLabelClick('__all__'),
+                      expandable: true,
+                      expanded: isExpanded('nav:labels'),
+                      onToggle: () => toggleExpanded('nav:labels'),
+                      contextMenu: {
+                        type: 'labels' as const,
+                        onConfigureLabels: openConfigureLabels,
+                        onAddLabel: handleAddLabel,
+                      },
+                      items: buildLabelSidebarItems(labelTree),
+                    },
+                    // --- Separator ---
+                    { id: "separator:chats-sources", type: "separator" },
+                    // --- Sources & Skills Section ---
+                    {
+                      id: "nav:sources",
+                      title: "Sources",
+                      label: String(sources.length),
+                      icon: DatabaseZap,
+                      variant: (isSourcesNavigation(navState) && !sourceFilter) ? "default" : "ghost",
+                      onClick: handleSourcesClick,
+                      dataTutorial: "sources-nav",
+                      expandable: true,
+                      expanded: isExpanded('nav:sources'),
+                      onToggle: () => toggleExpanded('nav:sources'),
+                      contextMenu: {
+                        type: 'sources',
+                        onAddSource: openAddSource,
+                      },
+                      items: [
                         {
-                          id: "nav:sources",
-                          title: "Sources",
-                          label: String(sources.length),
-                          icon: DatabaseZap,
-                          variant: (isSourcesNavigation(navState) && !sourceFilter) ? "default" : "ghost",
-                          onClick: handleSourcesClick,
-                          dataTutorial: "sources-nav",
-                          expandable: true,
-                          expanded: isExpanded('nav:sources'),
-                          onToggle: () => toggleExpanded('nav:sources'),
+                          id: "nav:sources:api",
+                          title: "APIs",
+                          label: String(sourceTypeCounts.api),
+                          icon: Globe,
+                          variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'api') ? "default" : "ghost",
+                          onClick: handleSourcesApiClick,
                           contextMenu: {
-                            type: 'sources',
-                            onAddSource: openAddSource,
-                          },
-                          items: [
-                            {
-                              id: "nav:sources:api",
-                              title: "APIs",
-                              label: String(sourceTypeCounts.api),
-                              icon: Globe,
-                              variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'api') ? "default" : "ghost",
-                              onClick: handleSourcesApiClick,
-                              contextMenu: {
-                                type: 'sources' as const,
-                                onAddSource: () => openAddSource('api'),
-                                sourceType: 'api',
-                              },
-                            },
-                            {
-                              id: "nav:sources:mcp",
-                              title: "MCPs",
-                              label: String(sourceTypeCounts.mcp),
-                              icon: <McpIcon className="h-3.5 w-3.5" />,
-                              variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'mcp') ? "default" : "ghost",
-                              onClick: handleSourcesMcpClick,
-                              contextMenu: {
-                                type: 'sources' as const,
-                                onAddSource: () => openAddSource('mcp'),
-                                sourceType: 'mcp',
-                              },
-                            },
-                            {
-                              id: "nav:sources:local",
-                              title: "Local Folders",
-                              label: String(sourceTypeCounts.local),
-                              icon: FolderOpen,
-                              variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'local') ? "default" : "ghost",
-                              onClick: handleSourcesLocalClick,
-                              contextMenu: {
-                                type: 'sources' as const,
-                                onAddSource: () => openAddSource('local'),
-                                sourceType: 'local',
-                              },
-                            },
-                          ],
-                        },
-                        {
-                          id: "nav:skills",
-                          title: "Skills",
-                          label: String(skills.length),
-                          icon: Zap,
-                          variant: isSkillsNavigation(navState) ? "default" : "ghost",
-                          onClick: handleSkillsClick,
-                          contextMenu: {
-                            type: 'skills',
-                            onAddSkill: openAddSkill,
+                            type: 'sources' as const,
+                            onAddSource: () => openAddSource('api'),
+                            sourceType: 'api',
                           },
                         },
-                        { id: "separator:skills-settings", type: "separator" },
                         {
-                          id: "nav:settings",
-                          title: "Settings",
-                          icon: Settings,
-                          variant: isSettingsNavigation(navState) ? "default" : "ghost",
-                          onClick: () => handleSettingsClick('app'),
-                        },
-                      ] : [
-                        {
-                          id: "nav:allChats",
-                          title: "All Chats",
-                          label: String(agentSessionMetas.length),
-                          icon: Inbox,
-                          variant: chatFilter?.kind === 'allChats' ? "default" : "ghost",
-                          onClick: handleAllChatsClick,
-                          expandable: true,
-                          expanded: isExpanded('nav:allChats'),
-                          onToggle: () => toggleExpanded('nav:allChats'),
+                          id: "nav:sources:mcp",
+                          title: "MCPs",
+                          label: String(sourceTypeCounts.mcp),
+                          icon: <McpIcon className="h-3.5 w-3.5" />,
+                          variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'mcp') ? "default" : "ghost",
+                          onClick: handleSourcesMcpClick,
                           contextMenu: {
-                            type: 'allChats',
-                            onConfigureStatuses: openConfigureStatuses,
-                          },
-                          items: [
-                            ...todoStates.map(state => ({
-                              id: `nav:state:${state.id}`,
-                              title: state.label,
-                              label: String(todoStateCounts[state.id] || 0),
-                              icon: state.icon,
-                              iconColor: state.color,
-                              iconColorable: state.iconColorable,
-                              variant: (chatFilter?.kind === 'state' && chatFilter.stateId === state.id ? "default" : "ghost") as "default" | "ghost",
-                              onClick: () => handleTodoStateClick(state.id),
-                              contextMenu: {
-                                type: 'status' as const,
-                                statusId: state.id,
-                                onConfigureStatuses: openConfigureStatuses,
-                              },
-                            })),
-                            { id: "separator:before-flagged", type: "separator" },
-                            {
-                              id: "nav:flagged",
-                              title: "Flagged",
-                              label: String(flaggedCount),
-                              icon: <Flag className="h-3.5 w-3.5 fill-current" />,
-                              iconColor: "text-info",
-                              variant: chatFilter?.kind === 'flagged' ? "default" : "ghost",
-                              onClick: handleFlaggedClick,
-                              contextMenu: {
-                                type: 'flagged' as const,
-                                onConfigureStatuses: openConfigureStatuses,
-                              },
-                            },
-                          ],
-                        },
-                        {
-                          id: "nav:sources",
-                          title: "Sources",
-                          label: String(sources.length),
-                          icon: DatabaseZap,
-                          variant: (isSourcesNavigation(navState) && !sourceFilter) ? "default" : "ghost",
-                          onClick: handleSourcesClick,
-                          dataTutorial: "sources-nav",
-                          expandable: true,
-                          expanded: isExpanded('nav:sources'),
-                          onToggle: () => toggleExpanded('nav:sources'),
-                          contextMenu: {
-                            type: 'sources',
-                            onAddSource: openAddSource,
-                          },
-                          items: [
-                            {
-                              id: "nav:sources:api",
-                              title: "APIs",
-                              label: String(sourceTypeCounts.api),
-                              icon: Globe,
-                              variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'api') ? "default" : "ghost",
-                              onClick: handleSourcesApiClick,
-                              contextMenu: {
-                                type: 'sources' as const,
-                                onAddSource: () => openAddSource('api'),
-                                sourceType: 'api',
-                              },
-                            },
-                            {
-                              id: "nav:sources:mcp",
-                              title: "MCPs",
-                              label: String(sourceTypeCounts.mcp),
-                              icon: <McpIcon className="h-3.5 w-3.5" />,
-                              variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'mcp') ? "default" : "ghost",
-                              onClick: handleSourcesMcpClick,
-                              contextMenu: {
-                                type: 'sources' as const,
-                                onAddSource: () => openAddSource('mcp'),
-                                sourceType: 'mcp',
-                              },
-                            },
-                            {
-                              id: "nav:sources:local",
-                              title: "Local Folders",
-                              label: String(sourceTypeCounts.local),
-                              icon: FolderOpen,
-                              variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'local') ? "default" : "ghost",
-                              onClick: handleSourcesLocalClick,
-                              contextMenu: {
-                                type: 'sources' as const,
-                                onAddSource: () => openAddSource('local'),
-                                sourceType: 'local',
-                              },
-                            },
-                          ],
-                        },
-                        {
-                          id: "nav:skills",
-                          title: "Skills",
-                          label: String(skills.length),
-                          icon: Zap,
-                          variant: isSkillsNavigation(navState) ? "default" : "ghost",
-                          onClick: handleSkillsClick,
-                          contextMenu: {
-                            type: 'skills',
-                            onAddSkill: openAddSkill,
+                            type: 'sources' as const,
+                            onAddSource: () => openAddSource('mcp'),
+                            sourceType: 'mcp',
                           },
                         },
-                        { id: "separator:skills-settings", type: "separator" },
                         {
-                          id: "nav:settings",
-                          title: "Settings",
-                          icon: Settings,
-                          variant: isSettingsNavigation(navState) ? "default" : "ghost",
-                          onClick: () => handleSettingsClick('app'),
+                          id: "nav:sources:local",
+                          title: "Local Folders",
+                          label: String(sourceTypeCounts.local),
+                          icon: FolderOpen,
+                          variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'local') ? "default" : "ghost",
+                          onClick: handleSourcesLocalClick,
+                          contextMenu: {
+                            type: 'sources' as const,
+                            onAddSource: () => openAddSource('local'),
+                            sourceType: 'local',
+                          },
                         },
-                      ]}
-                    />
-                    {/* Agent Tree: Hierarchical list of agents */}
-                    {/* Agents section removed */}
-                  </div>
-
-                  {/* Sidebar Bottom Section: WorkspaceSwitcher + Help icon */}
-                  <div className="mt-auto shrink-0 py-2 px-2">
-                    <div className="flex items-center gap-1">
-                      {/* Workspace switcher takes available space */}
-                      <div className="flex-1 min-w-0">
-                        <WorkspaceSwitcher
-                          isCollapsed={false}
-                          workspaces={workspaces}
-                          activeWorkspaceId={activeWorkspaceId}
-                          onSelect={onSelectWorkspace}
-                          onWorkspaceCreated={() => onRefreshWorkspaces?.()}
-                        />
-                      </div>
-                      {/* Help button - icon only with tooltip */}
-                      <DropdownMenu>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <DropdownMenuTrigger asChild>
-                                <button
-                                  className="flex items-center justify-center h-7 w-7 rounded-[6px] select-none outline-none hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                                >
-                                  <HelpCircle className="h-4 w-4 text-foreground/60" />
-                                </button>
-                              </DropdownMenuTrigger>
-                            </TooltipTrigger>
-                            <TooltipContent side="top">Help & Documentation</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                        <StyledDropdownMenuContent align="end" side="top" sideOffset={8}>
-                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('sources'))}>
-                            <DatabaseZap className="h-3.5 w-3.5" />
-                            <span className="flex-1">Sources</span>
-                            <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                          </StyledDropdownMenuItem>
-                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('skills'))}>
-                            <Zap className="h-3.5 w-3.5" />
-                            <span className="flex-1">Skills</span>
-                            <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                          </StyledDropdownMenuItem>
-                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('statuses'))}>
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            <span className="flex-1">Statuses</span>
-                            <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                          </StyledDropdownMenuItem>
-                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('permissions'))}>
-                            <Settings className="h-3.5 w-3.5" />
-                            <span className="flex-1">Permissions</span>
-                            <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                          </StyledDropdownMenuItem>
-                          <StyledDropdownMenuSeparator />
-                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl('https://agents.craft.do/docs')}>
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            <span className="flex-1">All Documentation</span>
-                          </StyledDropdownMenuItem>
-                        </StyledDropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </div>
+                      ],
+                    },
+                    {
+                      id: "nav:skills",
+                      title: "Skills",
+                      label: String(skills.length),
+                      icon: Zap,
+                      variant: isSkillsNavigation(navState) ? "default" : "ghost",
+                      onClick: handleSkillsClick,
+                      contextMenu: {
+                        type: 'skills',
+                        onAddSkill: openAddSkill,
+                      },
+                    },
+                    // --- Separator ---
+                    { id: "separator:skills-settings", type: "separator" },
+                    // --- Settings ---
+                    {
+                      id: "nav:settings",
+                      title: "Settings",
+                      icon: Settings,
+                      variant: isSettingsNavigation(navState) ? "default" : "ghost",
+                      onClick: () => handleSettingsClick('app'),
+                    },
+                  ]}
+                />
+                {/* Agent Tree: Hierarchical list of agents */}
+                {/* Agents section removed */}
                 </div>
               </div>
-            </motion.div>
+
+              {/* Sidebar Bottom Section: WorkspaceSwitcher + Help icon */}
+              <div className="mt-auto shrink-0 py-2 px-2">
+                <div className="flex items-center gap-1">
+                  {/* Workspace switcher takes available space */}
+                  <div className="flex-1 min-w-0">
+                    <WorkspaceSwitcher
+                      isCollapsed={false}
+                      workspaces={workspaces}
+                      activeWorkspaceId={activeWorkspaceId}
+                      onSelect={onSelectWorkspace}
+                      onWorkspaceCreated={() => onRefreshWorkspaces?.()}
+                    />
+                  </div>
+                  {/* Help button - icon only with tooltip */}
+                  <DropdownMenu>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              className="flex items-center justify-center h-7 w-7 rounded-[6px] select-none outline-none hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+                            >
+                              <HelpCircle className="h-4 w-4 text-foreground/60" />
+                            </button>
+                          </DropdownMenuTrigger>
+                        </TooltipTrigger>
+                        <TooltipContent side="top">Help & Documentation</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                    <StyledDropdownMenuContent align="end" side="top" sideOffset={8}>
+                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('sources'))}>
+                        <DatabaseZap className="h-3.5 w-3.5" />
+                        <span className="flex-1">Sources</span>
+                        <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                      </StyledDropdownMenuItem>
+                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('skills'))}>
+                        <Zap className="h-3.5 w-3.5" />
+                        <span className="flex-1">Skills</span>
+                        <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                      </StyledDropdownMenuItem>
+                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('statuses'))}>
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        <span className="flex-1">Statuses</span>
+                        <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                      </StyledDropdownMenuItem>
+                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('permissions'))}>
+                        <Settings className="h-3.5 w-3.5" />
+                        <span className="flex-1">Permissions</span>
+                        <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                      </StyledDropdownMenuItem>
+                      <StyledDropdownMenuSeparator />
+                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl('https://agents.craft.do/docs')}>
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        <span className="flex-1">All Documentation</span>
+                      </StyledDropdownMenuItem>
+                    </StyledDropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+        )}
+
+        {/* Sidebar Resize Handle (hidden in focused mode) */}
+        {!isFocusedMode && (
+        <div
+          ref={resizeHandleRef}
+          onMouseDown={(e) => { e.preventDefault(); setIsResizing('sidebar') }}
+          onMouseMove={(e) => {
+            if (resizeHandleRef.current) {
+              const rect = resizeHandleRef.current.getBoundingClientRect()
+              setSidebarHandleY(e.clientY - rect.top)
+            }
+          }}
+          onMouseLeave={() => { if (!isResizing) setSidebarHandleY(null) }}
+          className="absolute top-0 w-3 h-full cursor-col-resize z-panel flex justify-center"
+          style={{
+            left: isSidebarVisible ? sidebarWidth - 6 : -6,
+            transition: isResizing === 'sidebar' ? undefined : 'left 0.15s ease-out',
+          }}
+        >
+          {/* Visual indicator - 2px wide */}
+          <div
+            className="w-0.5 h-full"
+            style={getResizeGradientStyle(sidebarHandleY)}
+          />
+        </div>
+        )}
+
+        {/* === MAIN CONTENT (Right) ===
+            Flex layout: Session List | Chat Display */}
+        <div
+          className="flex-1 overflow-hidden min-w-0 flex h-full"
+          style={{ padding: PANEL_WINDOW_EDGE_SPACING, gap: PANEL_PANEL_SPACING / 2 }}
+        >
+          {/* === SESSION LIST PANEL === (hidden in focused mode) */}
+          {!isFocusedMode && (
+          <div
+            className="h-full flex flex-col min-w-0 bg-background shrink-0 shadow-middle overflow-hidden rounded-l-[14px] rounded-r-[10px]"
+            style={{ width: sessionListWidth }}
+          >
+            <PanelHeader
+              title={isSidebarVisible ? listTitle : undefined}
+              compensateForStoplight={!isSidebarVisible}
+              actions={
+                <>
+                  {/* Filter dropdown - allows filtering by todo states (only in All Chats view) */}
+                  {chatFilter?.kind === 'allChats' && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <HeaderIconButton
+                          icon={<ListFilter className="h-4 w-4" />}
+                          className={listFilter.size > 0 ? "text-foreground" : undefined}
+                        />
+                      </DropdownMenuTrigger>
+                      <StyledDropdownMenuContent align="end" light minWidth="min-w-[200px]">
+                        {/* Header with title and clear button */}
+                        <div className="flex items-center justify-between px-2 py-1.5 border-b border-foreground/5">
+                          <span className="text-xs font-medium text-muted-foreground">Filter Chats</span>
+                          {listFilter.size > 0 && (
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault()
+                                setListFilter(new Set())
+                              }}
+                              className="text-xs text-muted-foreground hover:text-foreground"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                        {/* Dynamic status filter items */}
+                        {effectiveTodoStates.map(state => {
+                          // Only apply color if icon is colorable (uses currentColor)
+                          const applyColor = state.iconColorable
+                          return (
+                            <StyledDropdownMenuItem
+                              key={state.id}
+                              onClick={(e) => {
+                                e.preventDefault()
+                                setListFilter(prev => {
+                                  const next = new Set(prev)
+                                  if (next.has(state.id)) next.delete(state.id)
+                                  else next.add(state.id)
+                                  return next
+                                })
+                              }}
+                            >
+                              <span
+                                className="h-3.5 w-3.5 flex items-center justify-center shrink-0 [&>svg]:w-full [&>svg]:h-full [&>img]:w-full [&>img]:h-full"
+                                style={applyColor ? { color: state.resolvedColor } : undefined}
+                              >
+                                {state.icon}
+                              </span>
+                              <span className="flex-1">{state.label}</span>
+                              <span className="w-3.5 ml-4">{listFilter.has(state.id) && <Check className="h-3.5 w-3.5 text-foreground" />}</span>
+                            </StyledDropdownMenuItem>
+                          )
+                        })}
+                        <StyledDropdownMenuSeparator />
+                        <StyledDropdownMenuItem
+                          onClick={() => {
+                            setSearchActive(true)
+                          }}
+                        >
+                          <Search className="h-3.5 w-3.5" />
+                          <span className="flex-1">Search</span>
+                        </StyledDropdownMenuItem>
+                        <StyledDropdownMenuSeparator />
+                        <StyledDropdownMenuItem
+                          onClick={() => {
+                            window.electronAPI?.openUrl(getDocUrl('statuses'))
+                          }}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          <span className="flex-1">Learn More</span>
+                        </StyledDropdownMenuItem>
+                      </StyledDropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                  {/* More menu with Search for non-allChats views (only for chats mode) */}
+                  {isChatsNavigation(navState) && chatFilter?.kind !== 'allChats' && (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <HeaderIconButton icon={<MoreHorizontal className="h-4 w-4" />} />
+                      </DropdownMenuTrigger>
+                      <StyledDropdownMenuContent align="end" light>
+                        <StyledDropdownMenuItem
+                          onClick={() => {
+                            setSearchActive(true)
+                          }}
+                        >
+                          <Search className="h-3.5 w-3.5" />
+                          <span className="flex-1">Search</span>
+                        </StyledDropdownMenuItem>
+                        <StyledDropdownMenuSeparator />
+                        <StyledDropdownMenuItem
+                          onClick={() => {
+                            window.electronAPI?.openUrl(getDocUrl('statuses'))
+                          }}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          <span className="flex-1">Learn More</span>
+                        </StyledDropdownMenuItem>
+                      </StyledDropdownMenuContent>
+                    </DropdownMenu>
+                  )}
+                  {/* Add Source button (only for sources mode) - uses filter-aware edit config */}
+                  {isSourcesNavigation(navState) && activeWorkspace && (
+                    <EditPopover
+                      trigger={
+                        <HeaderIconButton
+                          icon={<Plus className="h-4 w-4" />}
+                          tooltip="Add Source"
+                          data-tutorial="add-source-button"
+                        />
+                      }
+                      {...getEditConfig(
+                        sourceFilter?.kind === 'type' ? `add-source-${sourceFilter.sourceType}` as EditContextKey : 'add-source',
+                        activeWorkspace.rootPath
+                      )}
+                    />
+                  )}
+                  {/* Add Skill button (only for skills mode) */}
+                  {isSkillsNavigation(navState) && activeWorkspace && (
+                    <EditPopover
+                      trigger={
+                        <HeaderIconButton
+                          icon={<Plus className="h-4 w-4" />}
+                          tooltip="Add Skill"
+                          data-tutorial="add-skill-button"
+                        />
+                      }
+                      {...getEditConfig('add-skill', activeWorkspace.rootPath)}
+                    />
+                  )}
+                </>
+              }
+            />
+            {/* Content: SessionList, SourcesListPanel, or SettingsNavigator based on navigation state */}
+            {isSourcesNavigation(navState) && (
+              /* Sources List - filtered by type if sourceFilter is active */
+              <SourcesListPanel
+                sources={sources}
+                sourceFilter={sourceFilter}
+                workspaceRootPath={activeWorkspace?.rootPath}
+                onDeleteSource={handleDeleteSource}
+                onSourceClick={handleSourceSelect}
+                selectedSourceSlug={isSourcesNavigation(navState) && navState.details ? navState.details.sourceSlug : null}
+                localMcpEnabled={localMcpEnabled}
+              />
+            )}
+            {isSkillsNavigation(navState) && activeWorkspaceId && (
+              /* Skills List */
+              <SkillsListPanel
+                skills={skills}
+                workspaceId={activeWorkspaceId}
+                workspaceRootPath={activeWorkspace?.rootPath}
+                onSkillClick={handleSkillSelect}
+                onDeleteSkill={handleDeleteSkill}
+                selectedSkillSlug={isSkillsNavigation(navState) && navState.details ? navState.details.skillSlug : null}
+              />
+            )}
+            {isSettingsNavigation(navState) && (
+              /* Settings Navigator */
+              <SettingsNavigator
+                selectedSubpage={navState.subpage}
+                onSelectSubpage={(subpage) => handleSettingsClick(subpage)}
+              />
+            )}
+            {isChatsNavigation(navState) && (
+              /* Sessions List */
+              <>
+                {/* SessionList: Scrollable list of session cards */}
+                {/* Key on sidebarMode forces full remount when switching views, skipping animations */}
+                <SessionList
+                  key={chatFilter?.kind}
+                  items={filteredSessionMetas}
+                  onDelete={handleDeleteSession}
+                  onFlag={onFlagSession}
+                  onUnflag={onUnflagSession}
+                  onMarkUnread={onMarkSessionUnread}
+                  onTodoStateChange={onTodoStateChange}
+                  onRename={onRenameSession}
+                  onFocusChatInput={focusChatInput}
+                  onSessionSelect={(selectedMeta) => {
+                    // Navigate to the session via central routing (with filter context)
+                    if (!chatFilter || chatFilter.kind === 'allChats') {
+                      navigate(routes.view.allChats(selectedMeta.id))
+                    } else if (chatFilter.kind === 'flagged') {
+                      navigate(routes.view.flagged(selectedMeta.id))
+                    } else if (chatFilter.kind === 'state') {
+                      navigate(routes.view.state(chatFilter.stateId, selectedMeta.id))
+                    } else if (chatFilter.kind === 'label') {
+                      navigate(routes.view.label(chatFilter.labelId, selectedMeta.id))
+                    } else if (chatFilter.kind === 'view') {
+                      navigate(routes.view.view(chatFilter.viewId, selectedMeta.id))
+                    }
+                  }}
+                  onOpenInNewWindow={(selectedMeta) => {
+                    if (activeWorkspaceId) {
+                      window.electronAPI.openSessionInNewWindow(activeWorkspaceId, selectedMeta.id)
+                    }
+                  }}
+                  onNavigateToView={(view) => {
+                    if (view === 'allChats') {
+                      navigate(routes.view.allChats())
+                    } else if (view === 'flagged') {
+                      navigate(routes.view.flagged())
+                    }
+                  }}
+                  sessionOptions={sessionOptions}
+                  searchActive={searchActive}
+                  searchQuery={searchQuery}
+                  onSearchChange={setSearchQuery}
+                  onSearchClose={() => {
+                    setSearchActive(false)
+                    setSearchQuery('')
+                  }}
+                  todoStates={effectiveTodoStates}
+                  evaluateViews={evaluateViews}
+                  labels={labelConfigs}
+                />
+              </>
+            )}
+          </div>
           )}
 
-          {/* Sidebar Resize Handle (hidden in focused mode) */}
+          {/* Session List Resize Handle (hidden in focused mode) */}
           {!isFocusedMode && (
-            <div
-              ref={resizeHandleRef}
-              onMouseDown={(e) => { e.preventDefault(); setIsResizing('sidebar') }}
-              onMouseMove={(e) => {
-                if (resizeHandleRef.current) {
-                  const rect = resizeHandleRef.current.getBoundingClientRect()
-                  setSidebarHandleY(e.clientY - rect.top)
-                }
-              }}
-              onMouseLeave={() => { if (!isResizing) setSidebarHandleY(null) }}
-              className="absolute top-0 w-3 h-full cursor-col-resize z-panel flex justify-center"
-              style={{
-                left: isSidebarVisible ? sidebarWidth - 6 : -6,
-                transition: isResizing === 'sidebar' ? undefined : 'left 0.15s ease-out',
-              }}
-            >
-              {/* Visual indicator - 2px wide */}
+          <div
+            ref={sessionListHandleRef}
+            onMouseDown={(e) => { e.preventDefault(); setIsResizing('session-list') }}
+            onMouseMove={(e) => {
+              if (sessionListHandleRef.current) {
+                const rect = sessionListHandleRef.current.getBoundingClientRect()
+                setSessionListHandleY(e.clientY - rect.top)
+              }
+            }}
+            onMouseLeave={() => { if (isResizing !== 'session-list') setSessionListHandleY(null) }}
+            className="relative w-0 h-full cursor-col-resize flex justify-center shrink-0"
+          >
+            {/* Touch area */}
+            <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex justify-center cursor-col-resize">
               <div
-                className="w-0.5 h-full"
-                style={getResizeGradientStyle(sidebarHandleY)}
+                className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5"
+                style={getResizeGradientStyle(sessionListHandleY)}
               />
             </div>
+          </div>
           )}
 
-          {/* === MAIN CONTENT (Right) ===
-            Flex layout: Session List | Chat Display */}
-          <div
-            className="flex-1 overflow-hidden min-w-0 flex h-full"
-            style={{ padding: PANEL_WINDOW_EDGE_SPACING, gap: PANEL_PANEL_SPACING / 2 }}
-          >
-            {/* === SESSION LIST PANEL === (hidden in focused mode) */}
-            {!isFocusedMode && (
-              <div
-                className="h-full flex flex-col min-w-0 bg-background shrink-0 shadow-middle overflow-hidden rounded-l-[14px] rounded-r-[10px]"
-                style={{ width: sessionListWidth }}
-              >
-                <PanelHeader
-                  title={isSidebarVisible ? listTitle : undefined}
-                  compensateForStoplight={!isSidebarVisible}
-                  actions={
-                    <>
-                      {/* Filter dropdown - allows filtering by todo states (for All Chats view AND Chat Mode) */}
-                      {(chatFilter?.kind === 'allChats' || isChatNavigation(navState)) && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <HeaderIconButton
-                              icon={<ListFilter className="h-4 w-4" />}
-                              className={listFilter.size > 0 ? "text-foreground" : undefined}
-                            />
-                          </DropdownMenuTrigger>
-                          <StyledDropdownMenuContent align="end" light minWidth="min-w-[200px]">
-                            {/* Header with title and clear button */}
-                            <div className="flex items-center justify-between px-2 py-1.5 border-b border-foreground/5">
-                              <span className="text-xs font-medium text-muted-foreground">Filter Chats</span>
-                              {listFilter.size > 0 && (
-                                <button
-                                  onClick={(e) => {
-                                    e.preventDefault()
-                                    setListFilter(new Set())
-                                  }}
-                                  className="text-xs text-muted-foreground hover:text-foreground"
-                                >
-                                  Clear
-                                </button>
-                              )}
-                            </div>
-                            {/* Dynamic status filter items */}
-                            {todoStates.map(state => {
-                              // Only apply color if icon is colorable (uses currentColor)
-                              const applyColor = state.iconColorable
-                              return (
-                                <StyledDropdownMenuItem
-                                  key={state.id}
-                                  onClick={(e) => {
-                                    e.preventDefault()
-                                    setListFilter(prev => {
-                                      const next = new Set(prev)
-                                      if (next.has(state.id)) next.delete(state.id)
-                                      else next.add(state.id)
-                                      return next
-                                    })
-                                  }}
-                                >
-                                  <span
-                                    className={cn(
-                                      "h-3.5 w-3.5 flex items-center justify-center shrink-0 [&>svg]:w-full [&>svg]:h-full [&>img]:w-full [&>img]:h-full",
-                                      applyColor && !isHexColor(state.color) && state.color
-                                    )}
-                                    style={applyColor && isHexColor(state.color) ? { color: state.color } : undefined}
-                                  >
-                                    {state.icon}
-                                  </span>
-                                  <span className="flex-1">{state.label}</span>
-                                  <span className="w-3.5 ml-4">{listFilter.has(state.id) && <Check className="h-3.5 w-3.5 text-foreground" />}</span>
-                                </StyledDropdownMenuItem>
-                              )
-                            })}
-                            <StyledDropdownMenuSeparator />
-                            <StyledDropdownMenuItem
-                              onClick={() => {
-                                setSearchActive(true)
-                              }}
-                            >
-                              <Search className="h-3.5 w-3.5" />
-                              <span className="flex-1">Search</span>
-                            </StyledDropdownMenuItem>
-                            <StyledDropdownMenuSeparator />
-                            <StyledDropdownMenuItem
-                              onClick={() => {
-                                window.electronAPI?.openUrl(getDocUrl('statuses'))
-                              }}
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                              <span className="flex-1">Learn More</span>
-                            </StyledDropdownMenuItem>
-                          </StyledDropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                      {/* More menu with Search for non-allChats views (only for chats mode) */}
-                      {isChatsNavigation(navState) && chatFilter?.kind !== 'allChats' && !isChatNavigation(navState) && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <HeaderIconButton icon={<MoreHorizontal className="h-4 w-4" />} />
-                          </DropdownMenuTrigger>
-                          <StyledDropdownMenuContent align="end" light>
-                            <StyledDropdownMenuItem
-                              onClick={() => {
-                                setSearchActive(true)
-                              }}
-                            >
-                              <Search className="h-3.5 w-3.5" />
-                              <span className="flex-1">Search</span>
-                            </StyledDropdownMenuItem>
-                            <StyledDropdownMenuSeparator />
-                            <StyledDropdownMenuItem
-                              onClick={() => {
-                                window.electronAPI?.openUrl(getDocUrl('statuses'))
-                              }}
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                              <span className="flex-1">Learn More</span>
-                            </StyledDropdownMenuItem>
-                          </StyledDropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                      {/* Add Source button (only for sources mode) - uses filter-aware edit config */}
-                      {isSourcesNavigation(navState) && activeWorkspace && (
-                        <EditPopover
-                          trigger={
-                            <HeaderIconButton
-                              icon={<Plus className="h-4 w-4" />}
-                              tooltip="Add Source"
-                              data-tutorial="add-source-button"
-                            />
-                          }
-                          {...getEditConfig(
-                            sourceFilter?.kind === 'type' ? `add-source-${sourceFilter.sourceType}` : 'add-source',
-                            activeWorkspace.rootPath
-                          )}
-                        />
-                      )}
-                      {/* Add Skill button (only for skills mode) */}
-                      {isSkillsNavigation(navState) && activeWorkspace && (
-                        <EditPopover
-                          trigger={
-                            <HeaderIconButton
-                              icon={<Plus className="h-4 w-4" />}
-                              tooltip="Add Skill"
-                              data-tutorial="add-skill-button"
-                            />
-                          }
-                          {...getEditConfig('add-skill', activeWorkspace.rootPath)}
-                        />
-                      )}
-                    </>
-                  }
-                />
-                {/* Content: SessionList, SourcesListPanel, or SettingsNavigator based on navigation state */}
-                {isSourcesNavigation(navState) && (
-                  /* Sources List - filtered by type if sourceFilter is active */
-                  <SourcesListPanel
-                    sources={sources}
-                    sourceFilter={sourceFilter}
-                    workspaceRootPath={activeWorkspace?.rootPath}
-                    onDeleteSource={handleDeleteSource}
-                    onSourceClick={handleSourceSelect}
-                    selectedSourceSlug={isSourcesNavigation(navState) && navState.details ? navState.details.sourceSlug : null}
-                    localMcpEnabled={localMcpEnabled}
-                  />
-                )}
-                {isSkillsNavigation(navState) && activeWorkspaceId && (
-                  /* Skills List */
-                  <SkillsListPanel
-                    skills={skills}
-                    workspaceId={activeWorkspaceId}
-                    workspaceRootPath={activeWorkspace?.rootPath}
-                    onSkillClick={handleSkillSelect}
-                    onDeleteSkill={handleDeleteSkill}
-                    selectedSkillSlug={isSkillsNavigation(navState) && navState.details ? navState.details.skillSlug : null}
-                  />
-                )}
-                {isSettingsNavigation(navState) && (
-                  /* Settings Navigator */
-                  <SettingsNavigator
-                    selectedSubpage={navState.subpage}
-                    onSelectSubpage={(subpage) => handleSettingsClick(subpage)}
-                  />
-                )}
-                {(isChatsNavigation(navState) || isChatNavigation(navState)) && (
-                  /* Sessions List */
-                  <>
-                    {/* SessionList: Scrollable list of session cards */}
-                    {/* Key on sidebarMode forces full remount when switching views, skipping animations */}
-                    <SessionList
-                      key={chatFilter?.kind}
-                      items={filteredSessionMetas}
-                      onDelete={handleDeleteSession}
-                      onFlag={onFlagSession}
-                      onUnflag={onUnflagSession}
-                      onMarkUnread={onMarkSessionUnread}
-                      onTodoStateChange={onTodoStateChange}
-                      onRename={onRenameSession}
-                      onFocusChatInput={focusChatInput}
-                      onSessionSelect={(selectedMeta) => {
-                        // Save to appropriate storage key based on mode
-                        if (appMode === 'chat') {
-                          storage.set(storage.KEYS.lastChatSessionId, selectedMeta.id)
-                          navigate(routes.view.chat(selectedMeta.id))
-                        } else {
-                          storage.set(storage.KEYS.lastAgentSessionId, selectedMeta.id)
-                          // Navigate to the session via central routing (with filter context)
-                          if (!chatFilter || chatFilter.kind === 'allChats') {
-                            navigate(routes.view.allChats(selectedMeta.id))
-                          } else if (chatFilter.kind === 'flagged') {
-                            navigate(routes.view.flagged(selectedMeta.id))
-                          } else if (chatFilter.kind === 'state') {
-                            navigate(routes.view.state(chatFilter.stateId, selectedMeta.id))
-                          }
-                        }
-                      }}
-                      onOpenInNewWindow={(selectedMeta) => {
-                        if (activeWorkspaceId) {
-                          window.electronAPI.openSessionInNewWindow(activeWorkspaceId, selectedMeta.id)
-                        }
-                      }}
-                      onNavigateToView={(view) => {
-                        if (appMode === 'chat') {
-                          // In chat mode, just navigate to chat view
-                          navigate(routes.view.chat())
-                        } else {
-                          // In agent mode, navigate to appropriate view
-                          if (view === 'allChats') {
-                            navigate(routes.view.allChats())
-                          } else if (view === 'flagged') {
-                            navigate(routes.view.flagged())
-                          }
-                        }
-                      }}
-                      sessionOptions={sessionOptions}
-                      searchActive={searchActive}
-                      searchQuery={searchQuery}
-                      onSearchChange={setSearchQuery}
-                      onSearchClose={() => {
-                        setSearchActive(false)
-                        setSearchQuery('')
-                      }}
-                      todoStates={todoStates}
+          {/* === MAIN CONTENT PANEL === */}
+          <div className={cn(
+            "flex-1 overflow-hidden min-w-0 bg-foreground-2 shadow-middle",
+            isFocusedMode ? "rounded-[14px]" : (isRightSidebarVisible ? "rounded-l-[10px] rounded-r-[10px]" : "rounded-l-[10px] rounded-r-[14px]")
+          )}>
+            <MainContentPanel isFocusedMode={isFocusedMode} />
+          </div>
+
+          {/* Right Sidebar - Inline Mode (≥ 920px) */}
+          {!isFocusedMode && !shouldUseOverlay && (
+            <>
+              {/* Resize Handle */}
+              {isRightSidebarVisible && (
+                <div
+                  ref={rightSidebarHandleRef}
+                  onMouseDown={(e) => { e.preventDefault(); setIsResizing('right-sidebar') }}
+                  onMouseMove={(e) => {
+                    if (rightSidebarHandleRef.current) {
+                      const rect = rightSidebarHandleRef.current.getBoundingClientRect()
+                      setRightSidebarHandleY(e.clientY - rect.top)
+                    }
+                  }}
+                  onMouseLeave={() => { if (isResizing !== 'right-sidebar') setRightSidebarHandleY(null) }}
+                  className="relative w-0 h-full cursor-col-resize flex justify-center shrink-0"
+                >
+                  {/* Touch area */}
+                  <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex justify-center cursor-col-resize">
+                    <div
+                      className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5"
+                      style={getResizeGradientStyle(rightSidebarHandleY)}
                     />
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* Session List Resize Handle (hidden in focused mode) */}
-            {!isFocusedMode && (
-              <div
-                ref={sessionListHandleRef}
-                onMouseDown={(e) => { e.preventDefault(); setIsResizing('session-list') }}
-                onMouseMove={(e) => {
-                  if (sessionListHandleRef.current) {
-                    const rect = sessionListHandleRef.current.getBoundingClientRect()
-                    setSessionListHandleY(e.clientY - rect.top)
-                  }
-                }}
-                onMouseLeave={() => { if (isResizing !== 'session-list') setSessionListHandleY(null) }}
-                className="relative w-0 h-full cursor-col-resize flex justify-center shrink-0"
-              >
-                {/* Touch area */}
-                <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex justify-center cursor-col-resize">
-                  <div
-                    className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5"
-                    style={getResizeGradientStyle(sessionListHandleY)}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* === MAIN CONTENT PANEL === */}
-            <div className={cn(
-              "flex-1 overflow-hidden min-w-0 bg-foreground-2 shadow-middle",
-              isFocusedMode ? "rounded-[14px]" : (isRightSidebarVisible ? "rounded-l-[10px] rounded-r-[10px]" : "rounded-l-[10px] rounded-r-[14px]")
-            )}>
-              <MainContentPanel key={appMode} isFocusedMode={isFocusedMode} />
-            </div>
-
-            {/* Right Sidebar - Inline Mode (≥ 920px) */}
-            {!isFocusedMode && !shouldUseOverlay && (
-              <>
-                {/* Resize Handle */}
-                {isRightSidebarVisible && (
-                  <div
-                    ref={rightSidebarHandleRef}
-                    onMouseDown={(e) => { e.preventDefault(); setIsResizing('right-sidebar') }}
-                    onMouseMove={(e) => {
-                      if (rightSidebarHandleRef.current) {
-                        const rect = rightSidebarHandleRef.current.getBoundingClientRect()
-                        setRightSidebarHandleY(e.clientY - rect.top)
-                      }
-                    }}
-                    onMouseLeave={() => { if (isResizing !== 'right-sidebar') setRightSidebarHandleY(null) }}
-                    className="relative w-0 h-full cursor-col-resize flex justify-center shrink-0"
-                  >
-                    {/* Touch area */}
-                    <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex justify-center cursor-col-resize">
-                      <div
-                        className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5"
-                        style={getResizeGradientStyle(rightSidebarHandleY)}
-                      />
-                    </div>
                   </div>
-                )}
+                </div>
+              )}
 
-                {/* Inline Sidebar */}
+              {/* Inline Sidebar */}
+              <motion.div
+                initial={false}
+                animate={{
+                  width: isRightSidebarVisible ? rightSidebarWidth : 0,
+                  marginLeft: isRightSidebarVisible ? 0 : -PANEL_PANEL_SPACING / 2,
+                }}
+                transition={isResizing === 'right-sidebar' || skipRightSidebarAnimation ? { duration: 0 } : springTransition}
+                className="h-full shrink-0 overflow-visible"
+              >
                 <motion.div
                   initial={false}
                   animate={{
-                    width: isRightSidebarVisible ? rightSidebarWidth : 0,
-                    marginLeft: isRightSidebarVisible ? 0 : -PANEL_PANEL_SPACING / 2,
+                    x: isRightSidebarVisible ? 0 : rightSidebarWidth + PANEL_PANEL_SPACING / 2,
+                    opacity: isRightSidebarVisible ? 1 : 0,
                   }}
                   transition={isResizing === 'right-sidebar' || skipRightSidebarAnimation ? { duration: 0 } : springTransition}
-                  className="h-full shrink-0 overflow-visible"
+                  className="h-full bg-foreground-2 shadow-middle rounded-l-[10px] rounded-r-[14px]"
+                  style={{ width: rightSidebarWidth }}
                 >
-                  <motion.div
-                    initial={false}
-                    animate={{
-                      x: isRightSidebarVisible ? 0 : rightSidebarWidth + PANEL_PANEL_SPACING / 2,
-                      opacity: isRightSidebarVisible ? 1 : 0,
-                    }}
-                    transition={isResizing === 'right-sidebar' || skipRightSidebarAnimation ? { duration: 0 } : springTransition}
-                    className="h-full bg-foreground-2 shadow-middle rounded-l-[10px] rounded-r-[14px]"
-                    style={{ width: rightSidebarWidth }}
-                  >
-                    <RightSidebar
-                      panel={{ type: 'sessionMetadata' }}
-                      sessionId={'details' in navState && navState.details?.type === 'chat' ? (navState.details as any).sessionId : undefined}
-                      closeButton={rightSidebarCloseButton}
-                    />
-                  </motion.div>
+                  <RightSidebar
+                    panel={{ type: 'sessionMetadata' }}
+                    sessionId={isChatsNavigation(navState) && navState.details ? navState.details.sessionId : undefined}
+                    closeButton={rightSidebarCloseButton}
+                  />
                 </motion.div>
-              </>
-            )}
+              </motion.div>
+            </>
+          )}
 
-            {/* Right Sidebar - Overlay Mode (< 920px) */}
-            {!isFocusedMode && shouldUseOverlay && (
-              <AnimatePresence>
-                {isRightSidebarVisible && (
-                  <>
-                    {/* Backdrop */}
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={skipRightSidebarAnimation ? { duration: 0 } : { duration: 0.2 }}
-                      className="fixed inset-0 bg-black/25 z-overlay"
-                      onClick={() => setIsRightSidebarVisible(false)}
-                    />
-                    {/* Drawer panel */}
-                    <motion.div
-                      initial={{ x: 316 }}
-                      animate={{ x: 0 }}
-                      exit={{ x: 316 }}
-                      transition={skipRightSidebarAnimation ? { duration: 0 } : springTransition}
-                      className="fixed inset-y-0 right-0 w-[316px] h-screen z-overlay p-1.5"
-                    >
-                      <div className="h-full bg-foreground-2 overflow-hidden shadow-strong rounded-[12px]">
-                        <RightSidebar
-                          panel={{ type: 'sessionMetadata' }}
-                          sessionId={isChatsNavigation(navState) && navState.details ? navState.details.sessionId : undefined}
-                          closeButton={rightSidebarCloseButton}
-                        />
-                      </div>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
-            )}
-          </div>
+          {/* Right Sidebar - Overlay Mode (< 920px) */}
+          {!isFocusedMode && shouldUseOverlay && (
+            <AnimatePresence>
+              {isRightSidebarVisible && (
+                <>
+                  {/* Backdrop */}
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={skipRightSidebarAnimation ? { duration: 0 } : { duration: 0.2 }}
+                    className="fixed inset-0 bg-black/25 z-overlay"
+                    onClick={() => setIsRightSidebarVisible(false)}
+                  />
+                  {/* Drawer panel */}
+                  <motion.div
+                    initial={{ x: 316 }}
+                    animate={{ x: 0 }}
+                    exit={{ x: 316 }}
+                    transition={skipRightSidebarAnimation ? { duration: 0 } : springTransition}
+                    className="fixed inset-y-0 right-0 w-[316px] h-screen z-overlay p-1.5"
+                  >
+                    <div className="h-full bg-foreground-2 overflow-hidden shadow-strong rounded-[12px]">
+                      <RightSidebar
+                        panel={{ type: 'sessionMetadata' }}
+                        sessionId={isChatsNavigation(navState) && navState.details ? navState.details.sessionId : undefined}
+                        closeButton={rightSidebarCloseButton}
+                      />
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          )}
         </div>
+      </div>
 
-        {/* ============================================================================
+      {/* ============================================================================
        * CONTEXT MENU TRIGGERED EDIT POPOVERS
        * ============================================================================
        * These EditPopovers are opened programmatically from sidebar context menus.
        * They use controlled state (editPopoverOpen) and invisible anchors for positioning.
-       * Positioned near the sidebar (left side) since that's where context menus originate.
+       * The anchor Y position is captured from the right-clicked item (editPopoverAnchorY ref)
+       * so the popover appears near the triggering item rather than at a fixed location.
        * modal={true} prevents auto-close when focus shifts after context menu closes.
        */}
-        {activeWorkspace && (
-          <>
-            {/* Configure Statuses EditPopover - anchored near sidebar */}
-            <EditPopover
-              open={editPopoverOpen === 'statuses'}
-              onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'statuses' : null)}
-              modal={true}
-              trigger={
-                <div
-                  className="fixed top-[120px] w-0 h-0 pointer-events-none"
-                  style={{ left: sidebarWidth + 20 }}
-                  aria-hidden="true"
-                />
-              }
-              side="bottom"
-              align="start"
-              {...getEditConfig('edit-statuses', activeWorkspace.rootPath)}
-            />
-            {/* Add Source EditPopovers - one for each variant (generic + filter-specific)
+      {activeWorkspace && (
+        <>
+          {/* Configure Statuses EditPopover - anchored near sidebar */}
+          <EditPopover
+            open={editPopoverOpen === 'statuses'}
+            onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'statuses' : null)}
+            modal={true}
+            trigger={
+              <div
+                className="fixed w-0 h-0 pointer-events-none"
+                style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
+                aria-hidden="true"
+              />
+            }
+            side="bottom"
+            align="start"
+            {...getEditConfig('edit-statuses', activeWorkspace.rootPath)}
+          />
+          {/* Configure Labels EditPopover - anchored near sidebar */}
+          <EditPopover
+            open={editPopoverOpen === 'labels'}
+            onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'labels' : null)}
+            modal={true}
+            trigger={
+              <div
+                className="fixed w-0 h-0 pointer-events-none"
+                style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
+                aria-hidden="true"
+              />
+            }
+            side="bottom"
+            align="start"
+            {...getEditConfig('edit-labels', activeWorkspace.rootPath)}
+          />
+          {/* Edit Views EditPopover - anchored near sidebar */}
+          <EditPopover
+            open={editPopoverOpen === 'views'}
+            onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'views' : null)}
+            modal={true}
+            trigger={
+              <div
+                className="fixed w-0 h-0 pointer-events-none"
+                style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
+                aria-hidden="true"
+              />
+            }
+            side="bottom"
+            align="start"
+            {...getEditConfig('edit-views', activeWorkspace.rootPath)}
+          />
+          {/* Add Source EditPopovers - one for each variant (generic + filter-specific)
            * editPopoverOpen can be: 'add-source', 'add-source-api', 'add-source-mcp', 'add-source-local'
            * Each variant uses its corresponding EditContextKey for filter-aware agent context */}
-            {(['add-source', 'add-source-api', 'add-source-mcp', 'add-source-local'] as const).map((variant) => (
-              <EditPopover
-                key={variant}
-                open={editPopoverOpen === variant}
-                onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? variant : null)}
-                modal={true}
-                trigger={
-                  <div
-                    className="fixed top-[120px] w-0 h-0 pointer-events-none"
-                    style={{ left: sidebarWidth + 20 }}
-                    aria-hidden="true"
-                  />
-                }
-                side="bottom"
-                align="start"
-                {...getEditConfig(variant, activeWorkspace.rootPath)}
-              />
-            ))}
-            {/* Add Skill EditPopover */}
+          {(['add-source', 'add-source-api', 'add-source-mcp', 'add-source-local'] as const).map((variant) => (
             <EditPopover
-              open={editPopoverOpen === 'add-skill'}
-              onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'add-skill' : null)}
+              key={variant}
+              open={editPopoverOpen === variant}
+              onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? variant : null)}
               modal={true}
               trigger={
                 <div
@@ -2261,10 +2092,43 @@ function AppShellContent({
               }
               side="bottom"
               align="start"
-              {...getEditConfig('add-skill', activeWorkspace.rootPath)}
+              {...getEditConfig(variant, activeWorkspace.rootPath)}
             />
-          </>
-        )}
+          ))}
+          {/* Add Skill EditPopover */}
+          <EditPopover
+            open={editPopoverOpen === 'add-skill'}
+            onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'add-skill' : null)}
+            modal={true}
+            trigger={
+              <div
+                className="fixed w-0 h-0 pointer-events-none"
+                style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
+                aria-hidden="true"
+              />
+            }
+            side="bottom"
+            align="start"
+            {...getEditConfig('add-skill', activeWorkspace.rootPath)}
+          />
+          {/* Add Label EditPopover - triggered from "Add New Label" context menu on labels */}
+          <EditPopover
+            open={editPopoverOpen === 'add-label'}
+            onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'add-label' : null)}
+            modal={true}
+            trigger={
+              <div
+                className="fixed w-0 h-0 pointer-events-none"
+                style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
+                aria-hidden="true"
+              />
+            }
+            side="bottom"
+            align="start"
+            {...getEditConfig('add-label', activeWorkspace.rootPath)}
+          />
+        </>
+      )}
 
       </TooltipProvider>
     </AppShellProvider>

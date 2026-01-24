@@ -1,7 +1,7 @@
 import { app, ipcMain, nativeTheme, nativeImage, dialog, shell, BrowserWindow } from 'electron'
-import { readFile, realpath, mkdir, writeFile, unlink, rm } from 'fs/promises'
+import { readFile, readdir, stat, realpath, mkdir, writeFile, unlink, rm } from 'fs/promises'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { normalize, isAbsolute, join, basename, dirname, resolve } from 'path'
+import { normalize, isAbsolute, join, basename, dirname, resolve, relative } from 'path'
 import { homedir, tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { execSync } from 'child_process'
@@ -9,9 +9,9 @@ import { SessionManager } from './sessions'
 import { ipcLog, windowLog } from './logger'
 import { WindowManager } from './window-manager'
 import { registerOnboardingHandlers } from './onboarding'
-import { IPC_CHANNELS, type FileAttachment, type StoredAttachment, type AuthType, type BillingMethodInfo, type SendMessageOptions } from '../shared/types'
+import { IPC_CHANNELS, type FileAttachment, type StoredAttachment, type AuthType, type ApiSetupInfo, type SendMessageOptions } from '../shared/types'
 import { readFileAttachment, perf, validateImageForClaudeAPI, IMAGE_LIMITS } from '@craft-agent/shared/utils'
-import { getAuthType, setAuthType, getPreferencesPath, getModel, setModel, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, addWorkspace, setActiveWorkspace, type Workspace } from '@craft-agent/shared/config'
+import { getAuthType, setAuthType, getPreferencesPath, getCustomModel, setCustomModel, getModel, setModel, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, addWorkspace, setActiveWorkspace, getAnthropicBaseUrl, setAnthropicBaseUrl, loadStoredConfig, saveConfig, type Workspace, SUMMARIZATION_MODEL } from '@craft-agent/shared/config'
 import { getSessionAttachmentsPath } from '@craft-agent/shared/sessions'
 import { loadWorkspaceSources, getSourcesBySlugs, type LoadedSource } from '@craft-agent/shared/sources'
 import { isValidThinkingLevel } from '@craft-agent/shared/agent/thinking-levels'
@@ -346,6 +346,9 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         return sessionManager.markSessionRead(sessionId)
       case 'markUnread':
         return sessionManager.markSessionUnread(sessionId)
+      case 'setActiveViewing':
+        // Track which session user is actively viewing (for unread state machine)
+        return sessionManager.setActiveViewingSession(sessionId, command.workspaceId)
       case 'setPermissionMode':
         return sessionManager.setSessionPermissionMode(sessionId, command.mode)
       case 'setThinkingLevel':
@@ -358,6 +361,8 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
         return sessionManager.updateWorkingDirectory(sessionId, command.dir)
       case 'setSources':
         return sessionManager.setSessionSources(sessionId, command.sourceSlugs)
+      case 'setLabels':
+        return sessionManager.setSessionLabels(sessionId, command.labels)
       case 'showInFinder': {
         const sessionPath = sessionManager.getSessionPath(sessionId)
         if (sessionPath) {
@@ -701,6 +706,98 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     }
   })
 
+  // Debug logging from renderer → main log file (fire-and-forget, no response)
+  ipcMain.on(IPC_CHANNELS.DEBUG_LOG, (_event, ...args: unknown[]) => {
+    ipcLog.info('[renderer]', ...args)
+  })
+
+  // Filesystem search for @ mention file selection.
+  // Parallel BFS walk that skips ignored directories BEFORE entering them,
+  // avoiding reading node_modules/etc. contents entirely. Uses withFileTypes
+  // to get entry types without separate stat calls.
+  ipcMain.handle(IPC_CHANNELS.FS_SEARCH, async (_event, basePath: string, query: string) => {
+    ipcLog.info('[FS_SEARCH] called:', basePath, query)
+    const MAX_RESULTS = 50
+
+    // Directories to never recurse into
+    const SKIP_DIRS = new Set([
+      'node_modules', '.git', '.svn', '.hg', 'dist', 'build',
+      '.next', '.nuxt', '.cache', '__pycache__', 'vendor',
+      '.idea', '.vscode', 'coverage', '.nyc_output', '.turbo', 'out',
+    ])
+
+    const lowerQuery = query.toLowerCase()
+    const results: Array<{ name: string; path: string; type: 'file' | 'directory'; relativePath: string }> = []
+
+    try {
+      // BFS queue: each entry is a relative path prefix ('' for root)
+      let queue = ['']
+
+      while (queue.length > 0 && results.length < MAX_RESULTS) {
+        // Process current level: read all directories in parallel
+        const nextQueue: string[] = []
+
+        const dirResults = await Promise.all(
+          queue.map(async (relDir) => {
+            const absDir = relDir ? join(basePath, relDir) : basePath
+            try {
+              return { relDir, entries: await readdir(absDir, { withFileTypes: true }) }
+            } catch {
+              // Skip dirs we can't read (permissions, broken symlinks, etc.)
+              return { relDir, entries: [] as import('fs').Dirent[] }
+            }
+          })
+        )
+
+        for (const { relDir, entries } of dirResults) {
+          if (results.length >= MAX_RESULTS) break
+
+          for (const entry of entries) {
+            if (results.length >= MAX_RESULTS) break
+
+            const name = entry.name
+            // Skip hidden files/dirs and ignored directories
+            if (name.startsWith('.') || SKIP_DIRS.has(name)) continue
+
+            const relativePath = relDir ? `${relDir}/${name}` : name
+            const isDir = entry.isDirectory()
+
+            // Queue subdirectories for next BFS level
+            if (isDir) {
+              nextQueue.push(relativePath)
+            }
+
+            // Check if name or path matches the query
+            const lowerName = name.toLowerCase()
+            const lowerRelative = relativePath.toLowerCase()
+            if (lowerName.includes(lowerQuery) || lowerRelative.includes(lowerQuery)) {
+              results.push({
+                name,
+                path: join(basePath, relativePath),
+                type: isDir ? 'directory' : 'file',
+                relativePath,
+              })
+            }
+          }
+        }
+
+        queue = nextQueue
+      }
+
+      // Sort: directories first, then by name length (shorter = better match)
+      results.sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+        return a.name.length - b.name.length
+      })
+
+      ipcLog.info('[FS_SEARCH] returning', results.length, 'results')
+      return results
+    } catch (err) {
+      ipcLog.error('[FS_SEARCH] error:', err)
+      return []
+    }
+  })
+
   // Auto-update handlers
   // Manual check from UI - don't auto-download (user might be on metered connection)
   ipcMain.handle(IPC_CHANNELS.UPDATE_CHECK, async () => {
@@ -853,26 +950,40 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   })
 
   // ============================================================
-  // Settings - Billing Method
+  // Settings - API Setup
   // ============================================================
 
-  // Get current billing method and credential status
-  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_BILLING_METHOD, async (): Promise<BillingMethodInfo> => {
+  // Get current API setup and credential status
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_API_SETUP, async (): Promise<ApiSetupInfo> => {
     const authType = getAuthType()
     const manager = getCredentialManager()
 
     let hasCredential = false
+    let apiKey: string | undefined
+    let anthropicBaseUrl: string | undefined
+    let customModel: string | undefined
+
     if (authType === 'api_key') {
-      hasCredential = !!(await manager.getApiKey())
+      apiKey = await manager.getApiKey() ?? undefined
+      anthropicBaseUrl = getAnthropicBaseUrl() ?? undefined
+      customModel = getCustomModel() ?? undefined
+      // Keyless providers (Ollama) are valid when a custom base URL is configured
+      hasCredential = !!apiKey || !!anthropicBaseUrl
     } else if (authType === 'oauth_token') {
       hasCredential = !!(await manager.getClaudeOAuth())
     }
 
-    return { authType, hasCredential }
+    return {
+      authType,
+      hasCredential,
+      apiKey,
+      anthropicBaseUrl,
+      customModel,
+    }
   })
 
-  // Update billing method and credential
-  ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE_BILLING_METHOD, async (_event, authType: AuthType, credential?: string) => {
+  // Update API setup and credential
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_UPDATE_API_SETUP, async (_event, authType: AuthType, credential?: string, anthropicBaseUrl?: string | null, customModel?: string | null) => {
     const manager = getCredentialManager()
 
     // Clear old credentials when switching auth types
@@ -888,7 +999,32 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     // Set new auth type
     setAuthType(authType)
 
-    // Store new credential if provided
+    // Update Anthropic base URL (null to clear, undefined to keep unchanged)
+    if (anthropicBaseUrl !== undefined) {
+      try {
+        setAnthropicBaseUrl(anthropicBaseUrl)
+        if (anthropicBaseUrl) {
+          ipcLog.info('Anthropic base URL updated (HTTPS enforced)')
+        } else {
+          ipcLog.info('Anthropic base URL cleared')
+        }
+      } catch (error) {
+        ipcLog.error('Failed to set Anthropic base URL:', error)
+        throw error
+      }
+    }
+
+    // Update custom model (null to clear, undefined to keep unchanged)
+    if (customModel !== undefined) {
+      setCustomModel(customModel)
+      if (customModel) {
+        ipcLog.info('Custom model set:', customModel)
+      } else {
+        ipcLog.info('Custom model cleared')
+      }
+    }
+
+    // Store or clear credential
     if (credential) {
       if (authType === 'api_key') {
         await manager.setApiKey(credential)
@@ -909,9 +1045,18 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
           ipcLog.info('Saved Claude OAuth access token only')
         }
       }
+    } else if (credential === '') {
+      // Empty string means user explicitly cleared the credential
+      if (authType === 'api_key') {
+        await manager.delete({ type: 'anthropic_api_key' })
+        ipcLog.info('API key cleared')
+      } else if (authType === 'oauth_token') {
+        await manager.delete({ type: 'claude_oauth' })
+        ipcLog.info('Claude OAuth cleared')
+      }
     }
 
-    ipcLog.info(`Billing method updated to: ${authType}`)
+    ipcLog.info(`API setup updated to: ${authType}`)
 
     // Reinitialize SessionManager auth to pick up new credentials
     try {
@@ -923,20 +1068,144 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     }
   })
 
+  // Test API connection (validates API key, base URL, and optionally custom model)
+  ipcMain.handle(IPC_CHANNELS.SETTINGS_TEST_API_CONNECTION, async (_event, apiKey: string, baseUrl?: string, modelName?: string): Promise<{ success: boolean; error?: string; modelCount?: number }> => {
+    const trimmedKey = apiKey?.trim()
+    const trimmedUrl = baseUrl?.trim()
+
+    // Require API key unless a custom base URL is provided (e.g. Ollama needs no key)
+    if (!trimmedKey && !trimmedUrl) {
+      return { success: false, error: 'API key is required' }
+    }
+
+    try {
+      // Unified test: send a minimal POST to /v1/messages with a tool definition.
+      // This validates connection, auth, model existence, and tool support in one call.
+      // Works identically for Anthropic, OpenRouter, Vercel AI Gateway, and Ollama (v0.14+).
+      const Anthropic = (await import('@anthropic-ai/sdk')).default
+
+      // Auth strategy:
+      // - Custom base URL: pass key as authToken (SDK sends Authorization: Bearer,
+      //   which OpenRouter, Vercel AI Gateway, and Ollama all accept).
+      //   Explicitly null the other auth param to prevent SDK from reading env vars.
+      // - Anthropic direct: pass as apiKey (SDK sends x-api-key header)
+      const client = new Anthropic({
+        ...(trimmedUrl ? { baseURL: trimmedUrl } : {}),
+        ...(trimmedUrl
+          ? { authToken: trimmedKey || 'ollama', apiKey: null }  // Bearer for custom URLs; 'ollama' dummy for no-key local APIs
+          : { apiKey: trimmedKey, authToken: null }              // x-api-key for Anthropic direct
+        ),
+      })
+
+      // Determine test model: user-specified model takes priority, otherwise use
+      // the default Haiku model for known providers (validates full pipeline).
+      // Custom endpoints MUST specify a model — there's no sensible default.
+      const userModel = modelName?.trim()
+      let testModel: string
+      if (userModel) {
+        testModel = userModel
+      } else if (!trimmedUrl || trimmedUrl.includes('openrouter.ai') || trimmedUrl.includes('ai-gateway.vercel.sh')) {
+        // Anthropic, OpenRouter, and Vercel are all Anthropic-compatible — same model IDs
+        testModel = SUMMARIZATION_MODEL
+      } else {
+        // Custom endpoint with no model specified — can't test without knowing the model
+        return { success: false, error: 'Please specify a model for custom endpoints' }
+      }
+
+      // OpenAI models via providers like OpenRouter require max_tokens >= 16
+      // See: https://github.com/langgenius/dify-official-plugins/issues/1694
+      await client.messages.create({
+        model: testModel,
+        max_tokens: 16,
+        messages: [{ role: 'user', content: 'hi' }],
+        // Include a tool to validate tool/function calling support
+        tools: [{
+          name: 'test_tool',
+          description: 'Test tool for validation',
+          input_schema: { type: 'object' as const, properties: {} }
+        }]
+      })
+
+      // 200 response — everything works (auth, endpoint, model, tool support)
+      return { success: true }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      const lowerMsg = msg.toLowerCase()
+      ipcLog.info(`[testApiConnection] Error: ${msg.slice(0, 500)}`)
+
+      // Connection errors — server unreachable
+      if (lowerMsg.includes('econnrefused') || lowerMsg.includes('enotfound') || lowerMsg.includes('fetch failed')) {
+        return { success: false, error: 'Cannot connect to API server. Check the URL and ensure the server is running.' }
+      }
+
+      // 404 on endpoint — /v1/messages doesn't exist (wrong URL or Ollama < v0.14)
+      if (lowerMsg.includes('404') && !lowerMsg.includes('model')) {
+        return { success: false, error: 'Endpoint not found. Ensure the server supports the Anthropic Messages API (/v1/messages). For Ollama, version 0.14+ is required.' }
+      }
+
+      // Auth errors
+      if (lowerMsg.includes('401') || lowerMsg.includes('unauthorized') || lowerMsg.includes('authentication')) {
+        return { success: false, error: 'Invalid API key' }
+      }
+
+      // OpenRouter data policy errors (check before tool support since both may contain "model")
+      if (lowerMsg.includes('data policy') || lowerMsg.includes('privacy')) {
+        return { success: false, error: 'Data policy restriction. Configure your privacy settings at openrouter.ai/settings/privacy' }
+      }
+
+      // Tool support errors (check before model-not-found since tool errors often contain "model")
+      const isToolSupportError =
+        lowerMsg.includes('no endpoints found that support tool use') ||
+        lowerMsg.includes('does not support tool') ||
+        lowerMsg.includes('tool_use is not supported') ||
+        lowerMsg.includes('function calling not available') ||
+        lowerMsg.includes('tools are not supported') ||
+        lowerMsg.includes('doesn\'t support tool') ||
+        lowerMsg.includes('tool use is not supported') ||
+        (lowerMsg.includes('tool') && lowerMsg.includes('not') && lowerMsg.includes('support'))
+      if (isToolSupportError) {
+        const displayModel = modelName?.trim() || SUMMARIZATION_MODEL
+        return { success: false, error: `Model "${displayModel}" does not support tool/function calling. Craft Agent requires a model with tool support (e.g. Claude, GPT-4, Gemini).` }
+      }
+
+      // Model not found — always a failure. Since onboarding is the only place
+      // to configure the model, we must validate it actually exists.
+      const isModelNotFound =
+        lowerMsg.includes('model not found') ||
+        lowerMsg.includes('is not a valid model') ||
+        lowerMsg.includes('invalid model') ||
+        (lowerMsg.includes('404') && lowerMsg.includes('model'))
+      if (isModelNotFound) {
+        if (modelName?.trim()) {
+          return { success: false, error: `Model "${modelName}" not found. Check the model name and try again.` }
+        }
+        // Default model (Haiku) not found on a known provider — likely a billing/permissions issue
+        return { success: false, error: 'Could not access the default model. Check your API key permissions and billing.' }
+      }
+
+      // Fallback: return the raw error message
+      return { success: false, error: msg.slice(0, 300) }
+    }
+  })
+
   // ============================================================
-  // Settings - Model
+  // Settings - Model (Global Default)
   // ============================================================
 
-  // Get current model (returns stored model or null if not set)
+  // Get global default model
   ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_MODEL, async (): Promise<string | null> => {
     return getModel()
   })
 
-  // Set model preference
+  // Set global default model
   ipcMain.handle(IPC_CHANNELS.SETTINGS_SET_MODEL, async (_event, model: string) => {
     setModel(model)
-    ipcLog.info(`Model updated to: ${model}`)
+    ipcLog.info(`Global model updated to: ${model}`)
   })
+
+  // ============================================================
+  // Settings - Model (Session-Specific)
+  // ============================================================
 
   // Get session-specific model
   ipcMain.handle(IPC_CHANNELS.SESSION_GET_MODEL, async (_event, sessionId: string, _workspaceId: string): Promise<string | null> => {
@@ -1758,6 +2027,71 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
 
     const { listStatuses } = await import('@craft-agent/shared/statuses')
     return listStatuses(workspace.rootPath)
+  })
+
+  // Reorder statuses (drag-and-drop). Receives new ordered array of status IDs.
+  // Config watcher will detect the file change and broadcast STATUSES_CHANGED.
+  ipcMain.handle(IPC_CHANNELS.STATUSES_REORDER, async (_event, workspaceId: string, orderedIds: string[]) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { reorderStatuses } = await import('@craft-agent/shared/statuses')
+    reorderStatuses(workspace.rootPath, orderedIds)
+  })
+
+  // ============================================================
+  // Label Management (Workspace-scoped)
+  // ============================================================
+
+  // List all labels for a workspace
+  ipcMain.handle(IPC_CHANNELS.LABELS_LIST, async (_event, workspaceId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { listLabels } = await import('@craft-agent/shared/labels/storage')
+    return listLabels(workspace.rootPath)
+  })
+
+  // Create a new label in a workspace
+  ipcMain.handle(IPC_CHANNELS.LABELS_CREATE, async (_event, workspaceId: string, input: import('@craft-agent/shared/labels').CreateLabelInput) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { createLabel } = await import('@craft-agent/shared/labels/crud')
+    const label = createLabel(workspace.rootPath, input)
+    windowManager.broadcastToAll(IPC_CHANNELS.LABELS_CHANGED, workspaceId)
+    return label
+  })
+
+  // Delete a label (and descendants) from a workspace
+  ipcMain.handle(IPC_CHANNELS.LABELS_DELETE, async (_event, workspaceId: string, labelId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { deleteLabel } = await import('@craft-agent/shared/labels/crud')
+    const result = deleteLabel(workspace.rootPath, labelId)
+    windowManager.broadcastToAll(IPC_CHANNELS.LABELS_CHANGED, workspaceId)
+    return result
+  })
+
+  // List views for a workspace (dynamic expression-based filters stored in views.json)
+  ipcMain.handle(IPC_CHANNELS.VIEWS_LIST, async (_event, workspaceId: string) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { listViews } = await import('@craft-agent/shared/views/storage')
+    return listViews(workspace.rootPath)
+  })
+
+  // Save views (replaces full array)
+  ipcMain.handle(IPC_CHANNELS.VIEWS_SAVE, async (_event, workspaceId: string, views: import('@craft-agent/shared/views').ViewConfig[]) => {
+    const workspace = getWorkspaceByNameOrId(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+
+    const { saveViews } = await import('@craft-agent/shared/views/storage')
+    saveViews(workspace.rootPath, views)
+    // Broadcast labels changed since views are used alongside labels in sidebar
+    windowManager.broadcastToAll(IPC_CHANNELS.LABELS_CHANGED, workspaceId)
   })
 
   // Generic workspace image loading (for source icons, status icons, etc.)

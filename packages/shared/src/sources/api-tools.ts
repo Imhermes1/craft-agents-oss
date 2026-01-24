@@ -113,9 +113,10 @@ function buildUrl(
   auth: ApiConfig['auth'],
   credential: ApiCredential
 ): string {
-  // Ensure path starts with /
+  // Normalize: remove trailing slash from baseUrl and ensure path starts with /
+  const normalizedBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
-  let url = `${baseUrl}${normalizedPath}`;
+  let url = `${normalizedBase}${normalizedPath}`;
 
   // Handle query param auth (only for string credentials)
   const apiKey = typeof credential === 'string' ? credential : '';
@@ -171,27 +172,17 @@ function buildToolDescription(config: ApiConfig): string {
 }
 
 /**
- * Optional context for summarization in Chat mode
- */
-export interface SummarizationContext {
-  model?: string;
-  openRouterApiKey?: string;
-}
-
-/**
  * Create a single flexible MCP tool for an API configuration.
  * The tool accepts { path, method, params } and handles auth automatically.
  *
  * @param config - API configuration with documentation
  * @param credential - API credential source (string for API key/token, BasicAuthCredential for basic auth,
  *                     empty string for public APIs, or async function for OAuth token refresh)
- * @param summarizationContext - Optional context for Chat mode summarization (model and API key)
  * @returns SDK tool that can be included in an MCP server
  */
 export function createApiTool(
   config: ApiConfig,
-  credential: ApiCredentialSource,
-  summarizationContext?: SummarizationContext
+  credential: ApiCredentialSource
 ) {
   const toolName = `api_${config.name}`;
   debug(`[api-tools] Creating flexible tool: ${toolName}`);
@@ -260,8 +251,6 @@ export function createApiTool(
             path,
             input: params,
             modelIntent: _intent,
-            model: summarizationContext?.model,
-            openRouterApiKey: summarizationContext?.openRouterApiKey,
           });
           return {
             content: [{
@@ -291,17 +280,15 @@ export function createApiTool(
  * @param config - API configuration
  * @param credential - API credential source (string for API key/token, BasicAuthCredential for basic auth,
  *                     empty string for public APIs, or async function for OAuth token refresh)
- * @param summarizationContext - Optional context for Chat mode summarization (model and API key)
  * @returns SDK MCP server that can be passed to query()
  */
 export function createApiServer(
   config: ApiConfig,
-  credential: ApiCredentialSource,
-  summarizationContext?: SummarizationContext
+  credential: ApiCredentialSource
 ): ReturnType<typeof createSdkMcpServer> {
   debug(`[api-tools] Creating server for ${config.name}`);
 
-  const apiTool = createApiTool(config, credential, summarizationContext);
+  const apiTool = createApiTool(config, credential);
 
   return createSdkMcpServer({
     name: `api_${config.name}`,

@@ -22,6 +22,10 @@ export interface ParsedMentions {
   skills: string[]
   /** Source slugs mentioned via @src:slug */
   sources: string[]
+  /** File paths mentioned via [file:path] */
+  files: string[]
+  /** Folder paths mentioned via [folder:path] */
+  folders: string[]
 }
 
 export interface MentionMatch {
@@ -57,6 +61,8 @@ export function parseMentions(
   const result: ParsedMentions = {
     skills: [],
     sources: [],
+    files: [],
+    folders: [],
   }
 
   // Match source mentions: [source:slug]
@@ -69,12 +75,31 @@ export function parseMentions(
     }
   }
 
-  // Match skill mentions: [skill:slug]
-  const skillPattern = /\[skill:([\w-]+)\]/g
+  // Match skill mentions: [skill:slug] or [skill:workspaceId:slug]
+  // The pattern captures the last component (slug) after any number of colons
+  const skillPattern = /\[skill:(?:[\w-]+:)?([\w-]+)\]/g
   while ((match = skillPattern.exec(text)) !== null) {
     const slug = match[1]
     if (availableSkillSlugs.includes(slug) && !result.skills.includes(slug)) {
       result.skills.push(slug)
+    }
+  }
+
+  // Match file mentions: [file:path] (path can contain any chars except ])
+  const filePattern = /\[file:([^\]]+)\]/g
+  while ((match = filePattern.exec(text)) !== null) {
+    const filePath = match[1]
+    if (!result.files.includes(filePath)) {
+      result.files.push(filePath)
+    }
+  }
+
+  // Match folder mentions: [folder:path]
+  const folderPattern = /\[folder:([^\]]+)\]/g
+  while ((match = folderPattern.exec(text)) !== null) {
+    const folderPath = match[1]
+    if (!result.folders.includes(folderPath)) {
+      result.folders.push(folderPath)
     }
   }
 
@@ -111,8 +136,9 @@ export function findMentionMatches(
     }
   }
 
-  // Match skill mentions: [skill:slug]
-  const skillPattern = /(\[skill:([\w-]+)\])/g
+  // Match skill mentions: [skill:slug] or [skill:workspaceId:slug]
+  // The pattern captures the full match and extracts the slug (last component)
+  const skillPattern = /(\[skill:(?:[\w-]+:)?([\w-]+)\])/g
   while ((match = skillPattern.exec(text)) !== null) {
     const slug = match[2]
     if (availableSkillSlugs.includes(slug)) {
@@ -123,6 +149,28 @@ export function findMentionMatches(
         startIndex: match.index,
       })
     }
+  }
+
+  // Match file mentions: [file:path]
+  const filePattern = /(\[file:([^\]]+)\])/g
+  while ((match = filePattern.exec(text)) !== null) {
+    matches.push({
+      type: 'file',
+      id: match[2],
+      fullMatch: match[1],
+      startIndex: match.index,
+    })
+  }
+
+  // Match folder mentions: [folder:path]
+  const folderPattern = /(\[folder:([^\]]+)\])/g
+  while ((match = folderPattern.exec(text)) !== null) {
+    matches.push({
+      type: 'folder',
+      id: match[2],
+      fullMatch: match[1],
+      startIndex: match.index,
+    })
   }
 
   // Sort by position
@@ -144,9 +192,16 @@ export function removeMention(text: string, type: MentionItemType, id: string): 
     case 'source':
       pattern = new RegExp(`\\[source:${escapeRegExp(id)}\\]`, 'g')
       break
+    case 'file':
+      pattern = new RegExp(`\\[file:${escapeRegExp(id)}\\]`, 'g')
+      break
+    case 'folder':
+      pattern = new RegExp(`\\[folder:${escapeRegExp(id)}\\]`, 'g')
+      break
     case 'skill':
     default:
-      pattern = new RegExp(`\\[skill:${escapeRegExp(id)}\\]`, 'g')
+      // Match both [skill:slug] and [skill:workspaceId:slug]
+      pattern = new RegExp(`\\[skill:(?:[\\w-]+:)?${escapeRegExp(id)}\\]`, 'g')
       break
   }
 
@@ -166,8 +221,12 @@ export function stripAllMentions(text: string): string {
   return text
     // Remove [source:slug]
     .replace(/\[source:[\w-]+\]/g, '')
-    // Remove [skill:slug]
-    .replace(/\[skill:[\w-]+\]/g, '')
+    // Remove [skill:slug] or [skill:workspaceId:slug]
+    .replace(/\[skill:(?:[\w-]+:)?[\w-]+\]/g, '')
+    // Remove [file:path]
+    .replace(/\[file:[^\]]+\]/g, '')
+    // Remove [folder:path]
+    .replace(/\[folder:[^\]]+\]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -181,7 +240,7 @@ export function hasMentions(
   availableSourceSlugs: string[]
 ): boolean {
   const mentions = parseMentions(text, availableSkillSlugs, availableSourceSlugs)
-  return mentions.skills.length > 0 || mentions.sources.length > 0
+  return mentions.skills.length > 0 || mentions.sources.length > 0 || mentions.files.length > 0 || mentions.folders.length > 0
 }
 
 // ============================================================================
@@ -235,6 +294,7 @@ export function extractBadges(
   return matches.map(match => {
     let label = match.id
     let iconDataUrl: string | undefined
+    let filePath: string | undefined
 
     if (match.type === 'skill') {
       const skill = skills.find(s => s.slug === match.id)
@@ -248,13 +308,30 @@ export function extractBadges(
 
       // Get cached icon as data URL (preserves mime type for SVG, PNG, etc.)
       iconDataUrl = getSourceIconSync(workspaceId, match.id) ?? undefined
+    } else if (match.type === 'file') {
+      // Show filename as label, full relative path stored for tooltip
+      label = match.id.split('/').pop() || match.id
+      filePath = match.id
+    } else if (match.type === 'folder') {
+      // Show folder name as label, full relative path stored for tooltip
+      label = match.id.split('/').pop() || match.id
+      filePath = match.id
+    }
+
+    // For skills, create fully-qualified rawText (workspaceId:slug) so the agent
+    // receives the correct format for the SDK's Skill tool. The SDK requires
+    // fully-qualified names to resolve skills. Display label stays as the friendly name.
+    let rawText = match.fullMatch
+    if (match.type === 'skill') {
+      rawText = `[skill:${workspaceId}:${match.id}]`
     }
 
     return {
-      type: match.type as 'source' | 'skill',
+      type: match.type as 'source' | 'skill' | 'file' | 'folder',
       label,
-      rawText: match.fullMatch,
+      rawText,
       iconDataUrl,
+      filePath,
       start: match.startIndex,
       end: match.startIndex + match.fullMatch.length,
     }

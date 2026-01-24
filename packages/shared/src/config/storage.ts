@@ -31,18 +31,11 @@ export type {
 // Import for local use
 import type { Workspace, AuthType } from '@craft-agent/core/types';
 
-/**
- * Pending update info for auto-install on next launch
- */
-export interface PendingUpdate {
-  version: string;
-  installerPath: string;
-  sha256: string;
-}
-
 // Config stored in JSON file (credentials stored in encrypted file, not here)
 export interface StoredConfig {
   authType?: AuthType;
+  anthropicBaseUrl?: string;  // Custom Anthropic API base URL (for third-party compatible APIs)
+  customModel?: string;  // Custom model ID override (for third-party APIs like OpenRouter, Ollama)
   workspaces: Workspace[];
   activeWorkspaceId: string | null;
   activeSessionId: string | null;  // Currently active session (primary scope)
@@ -53,7 +46,6 @@ export interface StoredConfig {
   colorTheme?: string;  // ID of selected preset theme (e.g., 'dracula', 'nord'). Default: 'default'
   // Auto-update
   dismissedUpdateVersion?: string;  // Version that user dismissed (skip notifications for this version)
-  pendingUpdate?: PendingUpdate;  // Update ready for auto-install on next launch
 }
 
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
@@ -214,6 +206,25 @@ export function setAuthType(authType: AuthType): void {
   if (!config) return;
   config.authType = authType;
   saveConfig(config);
+}
+
+export function setAnthropicBaseUrl(baseUrl: string | null): void {
+  const config = loadStoredConfig();
+  if (!config) return;
+
+  if (baseUrl) {
+    const trimmed = baseUrl.trim();
+    // URL validation deferred to Test Connection button
+    config.anthropicBaseUrl = trimmed;
+  } else {
+    delete config.anthropicBaseUrl;
+  }
+  saveConfig(config);
+}
+
+export function getAnthropicBaseUrl(): string | null {
+  const config = loadStoredConfig();
+  return config?.anthropicBaseUrl ?? null;
 }
 
 export function getModel(): string | null {
@@ -1049,32 +1060,44 @@ export function clearDismissedUpdateVersion(): void {
   saveConfig(config);
 }
 
+// ============================================
+// Custom Model (for third-party APIs)
+// ============================================
+
 /**
- * Get the pending update info for auto-install on next launch.
- * Returns null if no pending update.
+ * Get custom model ID override for third-party APIs.
+ * When set, this single model is used for ALL API calls (main, summarization, etc.)
  */
-export function getPendingUpdate(): PendingUpdate | null {
+export function getCustomModel(): string | null {
   const config = loadStoredConfig();
-  return config?.pendingUpdate ?? null;
+  return config?.customModel?.trim() || null;
 }
 
 /**
- * Set the pending update info for auto-install on next launch.
+ * Set custom model ID for third-party APIs.
+ * Pass null to clear and use default Anthropic models.
  */
-export function setPendingUpdate(update: PendingUpdate): void {
+export function setCustomModel(model: string | null): void {
   const config = loadStoredConfig();
   if (!config) return;
-  config.pendingUpdate = update;
+
+  if (model?.trim()) {
+    config.customModel = model.trim();
+  } else {
+    delete config.customModel;
+  }
   saveConfig(config);
 }
 
 /**
- * Clear the pending update info.
- * Call this after successful install or if installer file is invalid.
+ * Resolve model ID based on custom model override.
+ * When a custom model is configured (for OpenRouter, Ollama, etc.),
+ * it overrides ALL model calls (main, summarization, extraction).
+ * @param defaultModelId - The default Anthropic model ID
+ * @returns The custom model if set, otherwise the default
  */
-export function clearPendingUpdate(): void {
-  const config = loadStoredConfig();
-  if (!config) return;
-  delete config.pendingUpdate;
-  saveConfig(config);
+export function resolveModelId(defaultModelId: string): string {
+  const customModel = getCustomModel();
+  if (customModel) return customModel;
+  return defaultModelId;
 }

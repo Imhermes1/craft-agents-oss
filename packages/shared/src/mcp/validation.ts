@@ -11,6 +11,7 @@ import { getDefaultOptions } from '../agent/options.ts';
 import { CraftMcpClient } from './client.js';
 import { debug } from '../utils/debug.ts';
 import { DEFAULT_MODEL } from '../config/models.ts';
+import { resolveModelId } from '../config/storage.ts';
 import { parseError, type AgentError } from '../agent/errors.ts';
 import { getLastApiError } from '../network-interceptor.ts';
 
@@ -180,7 +181,7 @@ export async function validateMcpConnection(
       options: {
         ...getDefaultOptions(),
         mcpServers,
-        model: config.model || DEFAULT_MODEL,
+        model: resolveModelId(config.model || DEFAULT_MODEL),
         abortController,
       },
     });
@@ -539,19 +540,30 @@ export async function validateStdioMcpConnection(
 
 /**
  * Get a user-friendly error message based on the validation result.
+ * Accepts optional transport context to distinguish local (stdio) vs remote failures.
  */
-export function getValidationErrorMessage(result: McpValidationResult): string {
+export function getValidationErrorMessage(
+  result: McpValidationResult,
+  context?: { transport?: string }
+): string {
+  // Prefer the SDK's error field when available (most specific)
+  if (result.error) return result.error;
+
   switch (result.errorType) {
     case 'failed':
-      return 'Could not connect to server - check the URL and your network.';
+      // Distinguish local stdio servers (crashed/not running) from remote (unreachable)
+      if (context?.transport === 'stdio') {
+        return 'Server process not running or failed to start.';
+      }
+      return 'Server unreachable - check the URL and your network.';
     case 'needs-auth':
-      return 'Server requires authentication - credentials may be invalid.';
+      return 'Authentication expired or was revoked.';
     case 'pending':
-      return 'Connection is still pending - please try again.';
+      return 'Connection is still pending - try again.';
     case 'invalid-schema':
-      return result.error || 'Server has tools with invalid property names.';
+      return 'Server has tools with invalid property names.';
     case 'unknown':
     default:
-      return result.error || 'Connection failed for an unknown reason.';
+      return 'Connection failed - check source configuration.';
   }
 }
