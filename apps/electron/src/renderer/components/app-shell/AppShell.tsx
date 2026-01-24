@@ -62,6 +62,8 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher"
 import { SessionList } from "./SessionList"
 import { MainContentPanel } from "./MainContentPanel"
 import { LeftSidebar } from "./LeftSidebar"
+import { CustomAppShellHeader } from "./CustomAppShellHeader"
+import { type AppMode } from "./ModeToggle"
 import { useSession } from "@/hooks/useSession"
 import { ensureSessionMessagesLoadedAtom } from "@/atoms/sessions"
 import { AppShellProvider, type AppShellContextType } from "@/context/AppShellContext"
@@ -215,6 +217,12 @@ function AppShellContent({
 
   // Window width tracking for responsive behavior
   const [windowWidth, setWindowWidth] = React.useState(window.innerWidth)
+
+  // App mode toggle (agent vs chat)
+  // Agent mode is default to preserve original app experience
+  const [appMode, setAppMode] = React.useState<AppMode>(() => {
+    return storage.get(storage.KEYS.appMode, 'agent') as AppMode
+  })
 
   // Calculate overlay threshold dynamically based on actual sidebar widths
   // Formula: 600px (300px right sidebar + 300px center) + leftSidebar + sessionList
@@ -508,19 +516,21 @@ function AppShellContent({
       // Tab navigation between zones
       { key: 'Tab', action: focusNextZone, when: () => !document.querySelector('[role="dialog"]') },
       // Shift+Tab cycles permission mode through enabled modes (textarea handles its own, this handles when focus is elsewhere)
-      { key: 'Tab', shift: true, action: () => {
-        if (session.selected) {
-          const currentOptions = contextValue.sessionOptions.get(session.selected)
-          const currentMode = currentOptions?.permissionMode ?? 'ask'
-          // Cycle through enabled permission modes
-          const modes = enabledModes.length >= 2 ? enabledModes : ['safe', 'ask', 'allow-all'] as PermissionMode[]
-          const currentIndex = modes.indexOf(currentMode)
-          // If current mode not in enabled list, jump to first enabled mode
-          const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % modes.length
-          const nextMode = modes[nextIndex]
-          contextValue.onSessionOptionsChange(session.selected, { permissionMode: nextMode })
-        }
-      }, when: () => !document.querySelector('[role="dialog"]') && document.activeElement?.tagName !== 'TEXTAREA' },
+      {
+        key: 'Tab', shift: true, action: () => {
+          if (session.selected) {
+            const currentOptions = contextValue.sessionOptions.get(session.selected)
+            const currentMode = currentOptions?.permissionMode ?? 'ask'
+            // Cycle through enabled permission modes
+            const modes = enabledModes.length >= 2 ? enabledModes : ['safe', 'ask', 'allow-all'] as PermissionMode[]
+            const currentIndex = modes.indexOf(currentMode)
+            // If current mode not in enabled list, jump to first enabled mode
+            const nextIndex = currentIndex === -1 ? 0 : (currentIndex + 1) % modes.length
+            const nextMode = modes[nextIndex]
+            contextValue.onSessionOptionsChange(session.selected, { permissionMode: nextMode })
+          }
+        }, when: () => !document.querySelector('[role="dialog"]') && document.activeElement?.tagName !== 'TEXTAREA'
+      },
       // Sidebar toggle (CMD+\ like VS Code, avoids conflict with CMD+B for bold)
       { key: '\\', cmd: true, action: () => setIsSidebarVisible(v => !v) },
       // New chat
@@ -532,27 +542,29 @@ function AppShellContent({
       { key: ']', cmd: true, action: goForward },
       // ESC to stop processing - requires double-press within 1 second
       // First press shows warning overlay, second press interrupts
-      { key: 'Escape', action: () => {
-        if (session.selected) {
-          const meta = sessionMetaMap.get(session.selected)
-          if (meta?.isProcessing) {
-            // handleEscapePress returns true on second press (within timeout)
-            const shouldInterrupt = handleEscapePress()
-            if (shouldInterrupt) {
-              window.electronAPI.cancelProcessing(session.selected, false).catch(err => {
-                console.error('[AppShell] Failed to cancel processing:', err)
-              })
+      {
+        key: 'Escape', action: () => {
+          if (session.selected) {
+            const meta = sessionMetaMap.get(session.selected)
+            if (meta?.isProcessing) {
+              // handleEscapePress returns true on second press (within timeout)
+              const shouldInterrupt = handleEscapePress()
+              if (shouldInterrupt) {
+                window.electronAPI.cancelProcessing(session.selected, false).catch(err => {
+                  console.error('[AppShell] Failed to cancel processing:', err)
+                })
+              }
             }
           }
+        }, when: () => {
+          // Only active when no overlay is open and session is processing
+          // Overlays (dialogs, menus, popovers, etc.) should handle their own Escape
+          if (hasOpenOverlay()) return false
+          if (!session.selected) return false
+          const meta = sessionMetaMap.get(session.selected)
+          return meta?.isProcessing ?? false
         }
-      }, when: () => {
-        // Only active when no overlay is open and session is processing
-        // Overlays (dialogs, menus, popovers, etc.) should handle their own Escape
-        if (hasOpenOverlay()) return false
-        if (!session.selected) return false
-        const meta = sessionMetaMap.get(session.selected)
-        return meta?.isProcessing ?? false
-      }},
+      },
     ],
   })
 
@@ -1329,693 +1341,694 @@ function AppShellContent({
         */}
         <div className="titlebar-drag-region fixed top-0 left-0 right-0 h-[50px] z-titlebar" />
 
-      {/* App Menu - fixed position, always visible (hidden in focused mode) */}
-      {!isFocusedMode && (
-        <div
-          className="fixed left-[86px] top-0 h-[50px] z-overlay flex items-center titlebar-no-drag pr-2"
-          style={{ width: sidebarWidth - 86 }}
-        >
-          <AppMenu
-            onNewChat={() => handleNewChat(true)}
-            onOpenSettings={onOpenSettings}
-            onOpenKeyboardShortcuts={onOpenKeyboardShortcuts}
-            onOpenStoredUserPreferences={onOpenStoredUserPreferences}
-            onReset={onReset}
-            onBack={goBack}
-            onForward={goForward}
-            canGoBack={canGoBack}
-            canGoForward={canGoForward}
-            onToggleSidebar={() => setIsSidebarVisible(prev => !prev)}
-            isSidebarVisible={isSidebarVisible}
-          />
-        </div>
-      )}
+        {/* App Menu - fixed position, always visible (hidden in focused mode) */}
+        {!isFocusedMode && (
+          <div
+            className="fixed left-[86px] top-0 h-[50px] z-overlay flex items-center titlebar-no-drag pr-2"
+            style={{ width: sidebarWidth - 86 }}
+          >
+            <AppMenu
+              onNewChat={() => handleNewChat(true)}
+              onOpenSettings={onOpenSettings}
+              onOpenKeyboardShortcuts={onOpenKeyboardShortcuts}
+              onOpenStoredUserPreferences={onOpenStoredUserPreferences}
+              onReset={onReset}
+              onBack={goBack}
+              onForward={goForward}
+              canGoBack={canGoBack}
+              canGoForward={canGoForward}
+              onToggleSidebar={() => setIsSidebarVisible(prev => !prev)}
+              isSidebarVisible={isSidebarVisible}
+            />
+          </div>
+        )}
 
-      {/* === OUTER LAYOUT: Sidebar | Main Content === */}
-      <div className="h-full flex items-stretch relative">
-        {/* === SIDEBAR (Left) === (hidden in focused mode)
+        {/* === OUTER LAYOUT: Sidebar | Main Content === */}
+        <div className="h-full flex items-stretch relative">
+          {/* === SIDEBAR (Left) === (hidden in focused mode)
             Animated width with spring physics for smooth 60-120fps transitions.
             Uses overflow-hidden to clip content during collapse animation.
             Resizable via drag handle on right edge (200-400px range). */}
-        {!isFocusedMode && (
-        <motion.div
-          initial={false}
-          animate={{ width: isSidebarVisible ? sidebarWidth : 0 }}
-          transition={isResizing ? { duration: 0 } : springTransition}
-          className="h-full overflow-hidden shrink-0 relative"
-        >
-          <div
-            ref={sidebarRef}
-            style={{ width: sidebarWidth }}
-            className="h-full font-sans relative"
-            data-focus-zone="sidebar"
-            tabIndex={sidebarFocused ? 0 : -1}
-            onKeyDown={handleSidebarKeyDown}
-          >
-            <div className="flex h-full flex-col pt-[50px] select-none">
-              {/* Sidebar Top Section */}
-              <div className="flex-1 flex flex-col min-h-0">
-                {/* New Chat Button - Gmail-style, with context menu for "Open in New Window" */}
-                <div className="px-2 pt-1 pb-2 shrink-0">
-                  <ContextMenu modal={true}>
-                    <ContextMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        onClick={() => handleNewChat(true)}
-                        className="w-full justify-start gap-2 py-[7px] px-2 text-[13px] font-normal rounded-[6px] shadow-minimal bg-background"
-                        data-tutorial="new-chat-button"
-                      >
-                        <SquarePenRounded className="h-3.5 w-3.5 shrink-0" />
-                        New Chat
-                      </Button>
-                    </ContextMenuTrigger>
-                    <StyledContextMenuContent>
-                      <ContextMenuProvider>
-                        <SidebarMenu type="newChat" />
-                      </ContextMenuProvider>
-                    </StyledContextMenuContent>
-                  </ContextMenu>
-                </div>
-                {/* Primary Nav: All Chats, Flagged, States, Labels | Sources, Skills | Settings */}
-                <div className="flex-1 overflow-y-auto min-h-0 mask-fade-bottom">
-                <LeftSidebar
-                  isCollapsed={false}
-                  getItemProps={getSidebarItemProps}
-                  focusedItemId={focusedSidebarItemId}
-                  links={[
-                    // --- Chats Section ---
-                    {
-                      id: "nav:allChats",
-                      title: "All Chats",
-                      label: String(workspaceSessionMetas.length),
-                      icon: Inbox,
-                      variant: chatFilter?.kind === 'allChats' ? "default" : "ghost",
-                      onClick: handleAllChatsClick,
-                    },
-                    {
-                      id: "nav:flagged",
-                      title: "Flagged",
-                      label: String(flaggedCount),
-                      icon: <Flag className="h-3.5 w-3.5" />,
-                      variant: chatFilter?.kind === 'flagged' ? "default" : "ghost",
-                      onClick: handleFlaggedClick,
-                    },
-                    // States: expandable section with status sub-items (drag-and-drop reorder)
-                    {
-                      id: "nav:states",
-                      title: "Status",
-                      icon: CheckCircle2,
-                      variant: "ghost",
-                      onClick: () => toggleExpanded('nav:states'),
-                      expandable: true,
-                      expanded: isExpanded('nav:states'),
-                      onToggle: () => toggleExpanded('nav:states'),
-                      contextMenu: {
-                        type: 'allChats',
-                        onConfigureStatuses: openConfigureStatuses,
-                      },
-                      // Enable flat DnD reorder for status items
-                      sortable: { onReorder: handleStatusReorder },
-                      items: effectiveTodoStates.map(state => ({
-                        id: `nav:state:${state.id}`,
-                        title: state.label,
-                        label: String(todoStateCounts[state.id] || 0),
-                        icon: state.icon,
-                        iconColor: state.resolvedColor,
-                        iconColorable: state.iconColorable,
-                        variant: (chatFilter?.kind === 'state' && chatFilter.stateId === state.id ? "default" : "ghost") as "default" | "ghost",
-                        onClick: () => handleTodoStateClick(state.id),
-                        contextMenu: {
-                          type: 'status' as const,
-                          statusId: state.id,
-                          onConfigureStatuses: openConfigureStatuses,
-                        },
-                      })),
-                    },
-                    // Labels: navigable header (shows all labeled sessions) + hierarchical tree (drag-and-drop reorder + re-parent)
-                    {
-                      id: "nav:labels",
-                      title: "Labels",
-                      icon: Tag,
-                      // Only highlighted when "Labels" itself is selected (not sub-labels)
-                      variant: (chatFilter?.kind === 'label' && chatFilter.labelId === '__all__') ? "default" as const : "ghost" as const,
-                      // Clicking navigates to "all labeled sessions" view
-                      onClick: () => handleLabelClick('__all__'),
-                      expandable: true,
-                      expanded: isExpanded('nav:labels'),
-                      onToggle: () => toggleExpanded('nav:labels'),
-                      contextMenu: {
-                        type: 'labels' as const,
-                        onConfigureLabels: openConfigureLabels,
-                        onAddLabel: handleAddLabel,
-                      },
-                      items: buildLabelSidebarItems(labelTree),
-                    },
-                    // --- Separator ---
-                    { id: "separator:chats-sources", type: "separator" },
-                    // --- Sources & Skills Section ---
-                    {
-                      id: "nav:sources",
-                      title: "Sources",
-                      label: String(sources.length),
-                      icon: DatabaseZap,
-                      variant: (isSourcesNavigation(navState) && !sourceFilter) ? "default" : "ghost",
-                      onClick: handleSourcesClick,
-                      dataTutorial: "sources-nav",
-                      expandable: true,
-                      expanded: isExpanded('nav:sources'),
-                      onToggle: () => toggleExpanded('nav:sources'),
-                      contextMenu: {
-                        type: 'sources',
-                        onAddSource: openAddSource,
-                      },
-                      items: [
-                        {
-                          id: "nav:sources:api",
-                          title: "APIs",
-                          label: String(sourceTypeCounts.api),
-                          icon: Globe,
-                          variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'api') ? "default" : "ghost",
-                          onClick: handleSourcesApiClick,
-                          contextMenu: {
-                            type: 'sources' as const,
-                            onAddSource: () => openAddSource('api'),
-                            sourceType: 'api',
-                          },
-                        },
-                        {
-                          id: "nav:sources:mcp",
-                          title: "MCPs",
-                          label: String(sourceTypeCounts.mcp),
-                          icon: <McpIcon className="h-3.5 w-3.5" />,
-                          variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'mcp') ? "default" : "ghost",
-                          onClick: handleSourcesMcpClick,
-                          contextMenu: {
-                            type: 'sources' as const,
-                            onAddSource: () => openAddSource('mcp'),
-                            sourceType: 'mcp',
-                          },
-                        },
-                        {
-                          id: "nav:sources:local",
-                          title: "Local Folders",
-                          label: String(sourceTypeCounts.local),
-                          icon: FolderOpen,
-                          variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'local') ? "default" : "ghost",
-                          onClick: handleSourcesLocalClick,
-                          contextMenu: {
-                            type: 'sources' as const,
-                            onAddSource: () => openAddSource('local'),
-                            sourceType: 'local',
-                          },
-                        },
-                      ],
-                    },
-                    {
-                      id: "nav:skills",
-                      title: "Skills",
-                      label: String(skills.length),
-                      icon: Zap,
-                      variant: isSkillsNavigation(navState) ? "default" : "ghost",
-                      onClick: handleSkillsClick,
-                      contextMenu: {
-                        type: 'skills',
-                        onAddSkill: openAddSkill,
-                      },
-                    },
-                    // --- Separator ---
-                    { id: "separator:skills-settings", type: "separator" },
-                    // --- Settings ---
-                    {
-                      id: "nav:settings",
-                      title: "Settings",
-                      icon: Settings,
-                      variant: isSettingsNavigation(navState) ? "default" : "ghost",
-                      onClick: () => handleSettingsClick('app'),
-                    },
-                  ]}
-                />
-                {/* Agent Tree: Hierarchical list of agents */}
-                {/* Agents section removed */}
-                </div>
-              </div>
-
-              {/* Sidebar Bottom Section: WorkspaceSwitcher + Help icon */}
-              <div className="mt-auto shrink-0 py-2 px-2">
-                <div className="flex items-center gap-1">
-                  {/* Workspace switcher takes available space */}
-                  <div className="flex-1 min-w-0">
-                    <WorkspaceSwitcher
-                      isCollapsed={false}
-                      workspaces={workspaces}
-                      activeWorkspaceId={activeWorkspaceId}
-                      onSelect={onSelectWorkspace}
-                      onWorkspaceCreated={() => onRefreshWorkspaces?.()}
-                    />
-                  </div>
-                  {/* Help button - icon only with tooltip */}
-                  <DropdownMenu>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              className="flex items-center justify-center h-7 w-7 rounded-[6px] select-none outline-none hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-                            >
-                              <HelpCircle className="h-4 w-4 text-foreground/60" />
-                            </button>
-                          </DropdownMenuTrigger>
-                        </TooltipTrigger>
-                        <TooltipContent side="top">Help & Documentation</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                    <StyledDropdownMenuContent align="end" side="top" sideOffset={8}>
-                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('sources'))}>
-                        <DatabaseZap className="h-3.5 w-3.5" />
-                        <span className="flex-1">Sources</span>
-                        <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                      </StyledDropdownMenuItem>
-                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('skills'))}>
-                        <Zap className="h-3.5 w-3.5" />
-                        <span className="flex-1">Skills</span>
-                        <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                      </StyledDropdownMenuItem>
-                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('statuses'))}>
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        <span className="flex-1">Statuses</span>
-                        <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                      </StyledDropdownMenuItem>
-                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('permissions'))}>
-                        <Settings className="h-3.5 w-3.5" />
-                        <span className="flex-1">Permissions</span>
-                        <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                      </StyledDropdownMenuItem>
-                      <StyledDropdownMenuSeparator />
-                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl('https://agents.craft.do/docs')}>
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        <span className="flex-1">All Documentation</span>
-                      </StyledDropdownMenuItem>
-                    </StyledDropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-            </div>
-          </div>
-        </motion.div>
-        )}
-
-        {/* Sidebar Resize Handle (hidden in focused mode) */}
-        {!isFocusedMode && (
-        <div
-          ref={resizeHandleRef}
-          onMouseDown={(e) => { e.preventDefault(); setIsResizing('sidebar') }}
-          onMouseMove={(e) => {
-            if (resizeHandleRef.current) {
-              const rect = resizeHandleRef.current.getBoundingClientRect()
-              setSidebarHandleY(e.clientY - rect.top)
-            }
-          }}
-          onMouseLeave={() => { if (!isResizing) setSidebarHandleY(null) }}
-          className="absolute top-0 w-3 h-full cursor-col-resize z-panel flex justify-center"
-          style={{
-            left: isSidebarVisible ? sidebarWidth - 6 : -6,
-            transition: isResizing === 'sidebar' ? undefined : 'left 0.15s ease-out',
-          }}
-        >
-          {/* Visual indicator - 2px wide */}
-          <div
-            className="w-0.5 h-full"
-            style={getResizeGradientStyle(sidebarHandleY)}
-          />
-        </div>
-        )}
-
-        {/* === MAIN CONTENT (Right) ===
-            Flex layout: Session List | Chat Display */}
-        <div
-          className="flex-1 overflow-hidden min-w-0 flex h-full"
-          style={{ padding: PANEL_WINDOW_EDGE_SPACING, gap: PANEL_PANEL_SPACING / 2 }}
-        >
-          {/* === SESSION LIST PANEL === (hidden in focused mode) */}
           {!isFocusedMode && (
-          <div
-            className="h-full flex flex-col min-w-0 bg-background shrink-0 shadow-middle overflow-hidden rounded-l-[14px] rounded-r-[10px]"
-            style={{ width: sessionListWidth }}
-          >
-            <PanelHeader
-              title={isSidebarVisible ? listTitle : undefined}
-              compensateForStoplight={!isSidebarVisible}
-              actions={
-                <>
-                  {/* Filter dropdown - allows filtering by todo states (only in All Chats view) */}
-                  {chatFilter?.kind === 'allChats' && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <HeaderIconButton
-                          icon={<ListFilter className="h-4 w-4" />}
-                          className={listFilter.size > 0 ? "text-foreground" : undefined}
-                        />
-                      </DropdownMenuTrigger>
-                      <StyledDropdownMenuContent align="end" light minWidth="min-w-[200px]">
-                        {/* Header with title and clear button */}
-                        <div className="flex items-center justify-between px-2 py-1.5 border-b border-foreground/5">
-                          <span className="text-xs font-medium text-muted-foreground">Filter Chats</span>
-                          {listFilter.size > 0 && (
-                            <button
-                              onClick={(e) => {
-                                e.preventDefault()
-                                setListFilter(new Set())
-                              }}
-                              className="text-xs text-muted-foreground hover:text-foreground"
-                            >
-                              Clear
-                            </button>
-                          )}
-                        </div>
-                        {/* Dynamic status filter items */}
-                        {effectiveTodoStates.map(state => {
-                          // Only apply color if icon is colorable (uses currentColor)
-                          const applyColor = state.iconColorable
-                          return (
-                            <StyledDropdownMenuItem
-                              key={state.id}
-                              onClick={(e) => {
-                                e.preventDefault()
-                                setListFilter(prev => {
-                                  const next = new Set(prev)
-                                  if (next.has(state.id)) next.delete(state.id)
-                                  else next.add(state.id)
-                                  return next
-                                })
-                              }}
-                            >
-                              <span
-                                className="h-3.5 w-3.5 flex items-center justify-center shrink-0 [&>svg]:w-full [&>svg]:h-full [&>img]:w-full [&>img]:h-full"
-                                style={applyColor ? { color: state.resolvedColor } : undefined}
-                              >
-                                {state.icon}
-                              </span>
-                              <span className="flex-1">{state.label}</span>
-                              <span className="w-3.5 ml-4">{listFilter.has(state.id) && <Check className="h-3.5 w-3.5 text-foreground" />}</span>
-                            </StyledDropdownMenuItem>
-                          )
-                        })}
-                        <StyledDropdownMenuSeparator />
-                        <StyledDropdownMenuItem
-                          onClick={() => {
-                            setSearchActive(true)
-                          }}
-                        >
-                          <Search className="h-3.5 w-3.5" />
-                          <span className="flex-1">Search</span>
-                        </StyledDropdownMenuItem>
-                        <StyledDropdownMenuSeparator />
-                        <StyledDropdownMenuItem
-                          onClick={() => {
-                            window.electronAPI?.openUrl(getDocUrl('statuses'))
-                          }}
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                          <span className="flex-1">Learn More</span>
-                        </StyledDropdownMenuItem>
-                      </StyledDropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                  {/* More menu with Search for non-allChats views (only for chats mode) */}
-                  {isChatsNavigation(navState) && chatFilter?.kind !== 'allChats' && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <HeaderIconButton icon={<MoreHorizontal className="h-4 w-4" />} />
-                      </DropdownMenuTrigger>
-                      <StyledDropdownMenuContent align="end" light>
-                        <StyledDropdownMenuItem
-                          onClick={() => {
-                            setSearchActive(true)
-                          }}
-                        >
-                          <Search className="h-3.5 w-3.5" />
-                          <span className="flex-1">Search</span>
-                        </StyledDropdownMenuItem>
-                        <StyledDropdownMenuSeparator />
-                        <StyledDropdownMenuItem
-                          onClick={() => {
-                            window.electronAPI?.openUrl(getDocUrl('statuses'))
-                          }}
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                          <span className="flex-1">Learn More</span>
-                        </StyledDropdownMenuItem>
-                      </StyledDropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                  {/* Add Source button (only for sources mode) - uses filter-aware edit config */}
-                  {isSourcesNavigation(navState) && activeWorkspace && (
-                    <EditPopover
-                      trigger={
-                        <HeaderIconButton
-                          icon={<Plus className="h-4 w-4" />}
-                          tooltip="Add Source"
-                          data-tutorial="add-source-button"
-                        />
-                      }
-                      {...getEditConfig(
-                        sourceFilter?.kind === 'type' ? `add-source-${sourceFilter.sourceType}` as EditContextKey : 'add-source',
-                        activeWorkspace.rootPath
-                      )}
-                    />
-                  )}
-                  {/* Add Skill button (only for skills mode) */}
-                  {isSkillsNavigation(navState) && activeWorkspace && (
-                    <EditPopover
-                      trigger={
-                        <HeaderIconButton
-                          icon={<Plus className="h-4 w-4" />}
-                          tooltip="Add Skill"
-                          data-tutorial="add-skill-button"
-                        />
-                      }
-                      {...getEditConfig('add-skill', activeWorkspace.rootPath)}
-                    />
-                  )}
-                </>
-              }
-            />
-            {/* Content: SessionList, SourcesListPanel, or SettingsNavigator based on navigation state */}
-            {isSourcesNavigation(navState) && (
-              /* Sources List - filtered by type if sourceFilter is active */
-              <SourcesListPanel
-                sources={sources}
-                sourceFilter={sourceFilter}
-                workspaceRootPath={activeWorkspace?.rootPath}
-                onDeleteSource={handleDeleteSource}
-                onSourceClick={handleSourceSelect}
-                selectedSourceSlug={isSourcesNavigation(navState) && navState.details ? navState.details.sourceSlug : null}
-                localMcpEnabled={localMcpEnabled}
-              />
-            )}
-            {isSkillsNavigation(navState) && activeWorkspaceId && (
-              /* Skills List */
-              <SkillsListPanel
-                skills={skills}
-                workspaceId={activeWorkspaceId}
-                workspaceRootPath={activeWorkspace?.rootPath}
-                onSkillClick={handleSkillSelect}
-                onDeleteSkill={handleDeleteSkill}
-                selectedSkillSlug={isSkillsNavigation(navState) && navState.details ? navState.details.skillSlug : null}
-              />
-            )}
-            {isSettingsNavigation(navState) && (
-              /* Settings Navigator */
-              <SettingsNavigator
-                selectedSubpage={navState.subpage}
-                onSelectSubpage={(subpage) => handleSettingsClick(subpage)}
-              />
-            )}
-            {isChatsNavigation(navState) && (
-              /* Sessions List */
-              <>
-                {/* SessionList: Scrollable list of session cards */}
-                {/* Key on sidebarMode forces full remount when switching views, skipping animations */}
-                <SessionList
-                  key={chatFilter?.kind}
-                  items={filteredSessionMetas}
-                  onDelete={handleDeleteSession}
-                  onFlag={onFlagSession}
-                  onUnflag={onUnflagSession}
-                  onMarkUnread={onMarkSessionUnread}
-                  onTodoStateChange={onTodoStateChange}
-                  onRename={onRenameSession}
-                  onFocusChatInput={focusChatInput}
-                  onSessionSelect={(selectedMeta) => {
-                    // Navigate to the session via central routing (with filter context)
-                    if (!chatFilter || chatFilter.kind === 'allChats') {
-                      navigate(routes.view.allChats(selectedMeta.id))
-                    } else if (chatFilter.kind === 'flagged') {
-                      navigate(routes.view.flagged(selectedMeta.id))
-                    } else if (chatFilter.kind === 'state') {
-                      navigate(routes.view.state(chatFilter.stateId, selectedMeta.id))
-                    } else if (chatFilter.kind === 'label') {
-                      navigate(routes.view.label(chatFilter.labelId, selectedMeta.id))
-                    } else if (chatFilter.kind === 'view') {
-                      navigate(routes.view.view(chatFilter.viewId, selectedMeta.id))
-                    }
-                  }}
-                  onOpenInNewWindow={(selectedMeta) => {
-                    if (activeWorkspaceId) {
-                      window.electronAPI.openSessionInNewWindow(activeWorkspaceId, selectedMeta.id)
-                    }
-                  }}
-                  onNavigateToView={(view) => {
-                    if (view === 'allChats') {
-                      navigate(routes.view.allChats())
-                    } else if (view === 'flagged') {
-                      navigate(routes.view.flagged())
-                    }
-                  }}
-                  sessionOptions={sessionOptions}
-                  searchActive={searchActive}
-                  searchQuery={searchQuery}
-                  onSearchChange={setSearchQuery}
-                  onSearchClose={() => {
-                    setSearchActive(false)
-                    setSearchQuery('')
-                  }}
-                  todoStates={effectiveTodoStates}
-                  evaluateViews={evaluateViews}
-                  labels={labelConfigs}
-                />
-              </>
-            )}
-          </div>
-          )}
-
-          {/* Session List Resize Handle (hidden in focused mode) */}
-          {!isFocusedMode && (
-          <div
-            ref={sessionListHandleRef}
-            onMouseDown={(e) => { e.preventDefault(); setIsResizing('session-list') }}
-            onMouseMove={(e) => {
-              if (sessionListHandleRef.current) {
-                const rect = sessionListHandleRef.current.getBoundingClientRect()
-                setSessionListHandleY(e.clientY - rect.top)
-              }
-            }}
-            onMouseLeave={() => { if (isResizing !== 'session-list') setSessionListHandleY(null) }}
-            className="relative w-0 h-full cursor-col-resize flex justify-center shrink-0"
-          >
-            {/* Touch area */}
-            <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex justify-center cursor-col-resize">
+            <motion.div
+              initial={false}
+              animate={{ width: isSidebarVisible ? sidebarWidth : 0 }}
+              transition={isResizing ? { duration: 0 } : springTransition}
+              className="h-full overflow-hidden shrink-0 relative"
+            >
               <div
-                className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5"
-                style={getResizeGradientStyle(sessionListHandleY)}
-              />
-            </div>
-          </div>
-          )}
+                ref={sidebarRef}
+                style={{ width: sidebarWidth }}
+                className="h-full font-sans relative"
+                data-focus-zone="sidebar"
+                tabIndex={sidebarFocused ? 0 : -1}
+                onKeyDown={handleSidebarKeyDown}
+              >
+                <div className="flex h-full flex-col pt-[50px] select-none">
+                  <CustomAppShellHeader mode={appMode} onChange={setAppMode} />
+                  {/* Sidebar Top Section */}
+                  <div className="flex-1 flex flex-col min-h-0">
+                    {/* New Chat Button - Gmail-style, with context menu for "Open in New Window" */}
+                    <div className="px-2 pt-1 pb-2 shrink-0">
+                      <ContextMenu modal={true}>
+                        <ContextMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            onClick={() => handleNewChat(true)}
+                            className="w-full justify-start gap-2 py-[7px] px-2 text-[13px] font-normal rounded-[6px] shadow-minimal bg-background"
+                            data-tutorial="new-chat-button"
+                          >
+                            <SquarePenRounded className="h-3.5 w-3.5 shrink-0" />
+                            New Chat
+                          </Button>
+                        </ContextMenuTrigger>
+                        <StyledContextMenuContent>
+                          <ContextMenuProvider>
+                            <SidebarMenu type="newChat" />
+                          </ContextMenuProvider>
+                        </StyledContextMenuContent>
+                      </ContextMenu>
+                    </div>
+                    {/* Primary Nav: All Chats, Flagged, States, Labels | Sources, Skills | Settings */}
+                    <div className="flex-1 overflow-y-auto min-h-0 mask-fade-bottom">
+                      <LeftSidebar
+                        isCollapsed={false}
+                        getItemProps={getSidebarItemProps}
+                        focusedItemId={focusedSidebarItemId}
+                        links={[
+                          // --- Chats Section ---
+                          {
+                            id: "nav:allChats",
+                            title: "All Chats",
+                            label: String(workspaceSessionMetas.length),
+                            icon: Inbox,
+                            variant: chatFilter?.kind === 'allChats' ? "default" : "ghost",
+                            onClick: handleAllChatsClick,
+                          },
+                          {
+                            id: "nav:flagged",
+                            title: "Flagged",
+                            label: String(flaggedCount),
+                            icon: <Flag className="h-3.5 w-3.5" />,
+                            variant: chatFilter?.kind === 'flagged' ? "default" : "ghost",
+                            onClick: handleFlaggedClick,
+                          },
+                          // States: expandable section with status sub-items (drag-and-drop reorder)
+                          {
+                            id: "nav:states",
+                            title: "Status",
+                            icon: CheckCircle2,
+                            variant: "ghost",
+                            onClick: () => toggleExpanded('nav:states'),
+                            expandable: true,
+                            expanded: isExpanded('nav:states'),
+                            onToggle: () => toggleExpanded('nav:states'),
+                            contextMenu: {
+                              type: 'allChats',
+                              onConfigureStatuses: openConfigureStatuses,
+                            },
+                            // Enable flat DnD reorder for status items
+                            sortable: { onReorder: handleStatusReorder },
+                            items: effectiveTodoStates.map(state => ({
+                              id: `nav:state:${state.id}`,
+                              title: state.label,
+                              label: String(todoStateCounts[state.id] || 0),
+                              icon: state.icon,
+                              iconColor: state.resolvedColor,
+                              iconColorable: state.iconColorable,
+                              variant: (chatFilter?.kind === 'state' && chatFilter.stateId === state.id ? "default" : "ghost") as "default" | "ghost",
+                              onClick: () => handleTodoStateClick(state.id),
+                              contextMenu: {
+                                type: 'status' as const,
+                                statusId: state.id,
+                                onConfigureStatuses: openConfigureStatuses,
+                              },
+                            })),
+                          },
+                          // Labels: navigable header (shows all labeled sessions) + hierarchical tree (drag-and-drop reorder + re-parent)
+                          {
+                            id: "nav:labels",
+                            title: "Labels",
+                            icon: Tag,
+                            // Only highlighted when "Labels" itself is selected (not sub-labels)
+                            variant: (chatFilter?.kind === 'label' && chatFilter.labelId === '__all__') ? "default" as const : "ghost" as const,
+                            // Clicking navigates to "all labeled sessions" view
+                            onClick: () => handleLabelClick('__all__'),
+                            expandable: true,
+                            expanded: isExpanded('nav:labels'),
+                            onToggle: () => toggleExpanded('nav:labels'),
+                            contextMenu: {
+                              type: 'labels' as const,
+                              onConfigureLabels: openConfigureLabels,
+                              onAddLabel: handleAddLabel,
+                            },
+                            items: buildLabelSidebarItems(labelTree),
+                          },
+                          // --- Separator ---
+                          { id: "separator:chats-sources", type: "separator" },
+                          // --- Sources & Skills Section ---
+                          {
+                            id: "nav:sources",
+                            title: "Sources",
+                            label: String(sources.length),
+                            icon: DatabaseZap,
+                            variant: (isSourcesNavigation(navState) && !sourceFilter) ? "default" : "ghost",
+                            onClick: handleSourcesClick,
+                            dataTutorial: "sources-nav",
+                            expandable: true,
+                            expanded: isExpanded('nav:sources'),
+                            onToggle: () => toggleExpanded('nav:sources'),
+                            contextMenu: {
+                              type: 'sources',
+                              onAddSource: openAddSource,
+                            },
+                            items: [
+                              {
+                                id: "nav:sources:api",
+                                title: "APIs",
+                                label: String(sourceTypeCounts.api),
+                                icon: Globe,
+                                variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'api') ? "default" : "ghost",
+                                onClick: handleSourcesApiClick,
+                                contextMenu: {
+                                  type: 'sources' as const,
+                                  onAddSource: () => openAddSource('api'),
+                                  sourceType: 'api',
+                                },
+                              },
+                              {
+                                id: "nav:sources:mcp",
+                                title: "MCPs",
+                                label: String(sourceTypeCounts.mcp),
+                                icon: <McpIcon className="h-3.5 w-3.5" />,
+                                variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'mcp') ? "default" : "ghost",
+                                onClick: handleSourcesMcpClick,
+                                contextMenu: {
+                                  type: 'sources' as const,
+                                  onAddSource: () => openAddSource('mcp'),
+                                  sourceType: 'mcp',
+                                },
+                              },
+                              {
+                                id: "nav:sources:local",
+                                title: "Local Folders",
+                                label: String(sourceTypeCounts.local),
+                                icon: FolderOpen,
+                                variant: (sourceFilter?.kind === 'type' && sourceFilter.sourceType === 'local') ? "default" : "ghost",
+                                onClick: handleSourcesLocalClick,
+                                contextMenu: {
+                                  type: 'sources' as const,
+                                  onAddSource: () => openAddSource('local'),
+                                  sourceType: 'local',
+                                },
+                              },
+                            ],
+                          },
+                          {
+                            id: "nav:skills",
+                            title: "Skills",
+                            label: String(skills.length),
+                            icon: Zap,
+                            variant: isSkillsNavigation(navState) ? "default" : "ghost",
+                            onClick: handleSkillsClick,
+                            contextMenu: {
+                              type: 'skills',
+                              onAddSkill: openAddSkill,
+                            },
+                          },
+                          // --- Separator ---
+                          { id: "separator:skills-settings", type: "separator" },
+                          // --- Settings ---
+                          {
+                            id: "nav:settings",
+                            title: "Settings",
+                            icon: Settings,
+                            variant: isSettingsNavigation(navState) ? "default" : "ghost",
+                            onClick: () => handleSettingsClick('app'),
+                          },
+                        ]}
+                      />
+                      {/* Agent Tree: Hierarchical list of agents */}
+                      {/* Agents section removed */}
+                    </div>
+                  </div>
 
-          {/* === MAIN CONTENT PANEL === */}
-          <div className={cn(
-            "flex-1 overflow-hidden min-w-0 bg-foreground-2 shadow-middle",
-            isFocusedMode ? "rounded-[14px]" : (isRightSidebarVisible ? "rounded-l-[10px] rounded-r-[10px]" : "rounded-l-[10px] rounded-r-[14px]")
-          )}>
-            <MainContentPanel isFocusedMode={isFocusedMode} />
-          </div>
-
-          {/* Right Sidebar - Inline Mode (≥ 920px) */}
-          {!isFocusedMode && !shouldUseOverlay && (
-            <>
-              {/* Resize Handle */}
-              {isRightSidebarVisible && (
-                <div
-                  ref={rightSidebarHandleRef}
-                  onMouseDown={(e) => { e.preventDefault(); setIsResizing('right-sidebar') }}
-                  onMouseMove={(e) => {
-                    if (rightSidebarHandleRef.current) {
-                      const rect = rightSidebarHandleRef.current.getBoundingClientRect()
-                      setRightSidebarHandleY(e.clientY - rect.top)
-                    }
-                  }}
-                  onMouseLeave={() => { if (isResizing !== 'right-sidebar') setRightSidebarHandleY(null) }}
-                  className="relative w-0 h-full cursor-col-resize flex justify-center shrink-0"
-                >
-                  {/* Touch area */}
-                  <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex justify-center cursor-col-resize">
-                    <div
-                      className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5"
-                      style={getResizeGradientStyle(rightSidebarHandleY)}
-                    />
+                  {/* Sidebar Bottom Section: WorkspaceSwitcher + Help icon */}
+                  <div className="mt-auto shrink-0 py-2 px-2">
+                    <div className="flex items-center gap-1">
+                      {/* Workspace switcher takes available space */}
+                      <div className="flex-1 min-w-0">
+                        <WorkspaceSwitcher
+                          isCollapsed={false}
+                          workspaces={workspaces}
+                          activeWorkspaceId={activeWorkspaceId}
+                          onSelect={onSelectWorkspace}
+                          onWorkspaceCreated={() => onRefreshWorkspaces?.()}
+                        />
+                      </div>
+                      {/* Help button - icon only with tooltip */}
+                      <DropdownMenu>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  className="flex items-center justify-center h-7 w-7 rounded-[6px] select-none outline-none hover:bg-foreground/5 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+                                >
+                                  <HelpCircle className="h-4 w-4 text-foreground/60" />
+                                </button>
+                              </DropdownMenuTrigger>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">Help & Documentation</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <StyledDropdownMenuContent align="end" side="top" sideOffset={8}>
+                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('sources'))}>
+                            <DatabaseZap className="h-3.5 w-3.5" />
+                            <span className="flex-1">Sources</span>
+                            <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                          </StyledDropdownMenuItem>
+                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('skills'))}>
+                            <Zap className="h-3.5 w-3.5" />
+                            <span className="flex-1">Skills</span>
+                            <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                          </StyledDropdownMenuItem>
+                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('statuses'))}>
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            <span className="flex-1">Statuses</span>
+                            <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                          </StyledDropdownMenuItem>
+                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(getDocUrl('permissions'))}>
+                            <Settings className="h-3.5 w-3.5" />
+                            <span className="flex-1">Permissions</span>
+                            <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                          </StyledDropdownMenuItem>
+                          <StyledDropdownMenuSeparator />
+                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl('https://agents.craft.do/docs')}>
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            <span className="flex-1">All Documentation</span>
+                          </StyledDropdownMenuItem>
+                        </StyledDropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
                   </div>
                 </div>
-              )}
+              </div>
+            </motion.div>
+          )}
 
-              {/* Inline Sidebar */}
-              <motion.div
-                initial={false}
-                animate={{
-                  width: isRightSidebarVisible ? rightSidebarWidth : 0,
-                  marginLeft: isRightSidebarVisible ? 0 : -PANEL_PANEL_SPACING / 2,
-                }}
-                transition={isResizing === 'right-sidebar' || skipRightSidebarAnimation ? { duration: 0 } : springTransition}
-                className="h-full shrink-0 overflow-visible"
+          {/* Sidebar Resize Handle (hidden in focused mode) */}
+          {!isFocusedMode && (
+            <div
+              ref={resizeHandleRef}
+              onMouseDown={(e) => { e.preventDefault(); setIsResizing('sidebar') }}
+              onMouseMove={(e) => {
+                if (resizeHandleRef.current) {
+                  const rect = resizeHandleRef.current.getBoundingClientRect()
+                  setSidebarHandleY(e.clientY - rect.top)
+                }
+              }}
+              onMouseLeave={() => { if (!isResizing) setSidebarHandleY(null) }}
+              className="absolute top-0 w-3 h-full cursor-col-resize z-panel flex justify-center"
+              style={{
+                left: isSidebarVisible ? sidebarWidth - 6 : -6,
+                transition: isResizing === 'sidebar' ? undefined : 'left 0.15s ease-out',
+              }}
+            >
+              {/* Visual indicator - 2px wide */}
+              <div
+                className="w-0.5 h-full"
+                style={getResizeGradientStyle(sidebarHandleY)}
+              />
+            </div>
+          )}
+
+          {/* === MAIN CONTENT (Right) ===
+            Flex layout: Session List | Chat Display */}
+          <div
+            className="flex-1 overflow-hidden min-w-0 flex h-full"
+            style={{ padding: PANEL_WINDOW_EDGE_SPACING, gap: PANEL_PANEL_SPACING / 2 }}
+          >
+            {/* === SESSION LIST PANEL === (hidden in focused mode) */}
+            {!isFocusedMode && (
+              <div
+                className="h-full flex flex-col min-w-0 bg-background shrink-0 shadow-middle overflow-hidden rounded-l-[14px] rounded-r-[10px]"
+                style={{ width: sessionListWidth }}
               >
+                <PanelHeader
+                  title={isSidebarVisible ? listTitle : undefined}
+                  compensateForStoplight={!isSidebarVisible}
+                  actions={
+                    <>
+                      {/* Filter dropdown - allows filtering by todo states (only in All Chats view) */}
+                      {chatFilter?.kind === 'allChats' && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <HeaderIconButton
+                              icon={<ListFilter className="h-4 w-4" />}
+                              className={listFilter.size > 0 ? "text-foreground" : undefined}
+                            />
+                          </DropdownMenuTrigger>
+                          <StyledDropdownMenuContent align="end" light minWidth="min-w-[200px]">
+                            {/* Header with title and clear button */}
+                            <div className="flex items-center justify-between px-2 py-1.5 border-b border-foreground/5">
+                              <span className="text-xs font-medium text-muted-foreground">Filter Chats</span>
+                              {listFilter.size > 0 && (
+                                <button
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    setListFilter(new Set())
+                                  }}
+                                  className="text-xs text-muted-foreground hover:text-foreground"
+                                >
+                                  Clear
+                                </button>
+                              )}
+                            </div>
+                            {/* Dynamic status filter items */}
+                            {effectiveTodoStates.map(state => {
+                              // Only apply color if icon is colorable (uses currentColor)
+                              const applyColor = state.iconColorable
+                              return (
+                                <StyledDropdownMenuItem
+                                  key={state.id}
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    setListFilter(prev => {
+                                      const next = new Set(prev)
+                                      if (next.has(state.id)) next.delete(state.id)
+                                      else next.add(state.id)
+                                      return next
+                                    })
+                                  }}
+                                >
+                                  <span
+                                    className="h-3.5 w-3.5 flex items-center justify-center shrink-0 [&>svg]:w-full [&>svg]:h-full [&>img]:w-full [&>img]:h-full"
+                                    style={applyColor ? { color: state.resolvedColor } : undefined}
+                                  >
+                                    {state.icon}
+                                  </span>
+                                  <span className="flex-1">{state.label}</span>
+                                  <span className="w-3.5 ml-4">{listFilter.has(state.id) && <Check className="h-3.5 w-3.5 text-foreground" />}</span>
+                                </StyledDropdownMenuItem>
+                              )
+                            })}
+                            <StyledDropdownMenuSeparator />
+                            <StyledDropdownMenuItem
+                              onClick={() => {
+                                setSearchActive(true)
+                              }}
+                            >
+                              <Search className="h-3.5 w-3.5" />
+                              <span className="flex-1">Search</span>
+                            </StyledDropdownMenuItem>
+                            <StyledDropdownMenuSeparator />
+                            <StyledDropdownMenuItem
+                              onClick={() => {
+                                window.electronAPI?.openUrl(getDocUrl('statuses'))
+                              }}
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              <span className="flex-1">Learn More</span>
+                            </StyledDropdownMenuItem>
+                          </StyledDropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                      {/* More menu with Search for non-allChats views (only for chats mode) */}
+                      {isChatsNavigation(navState) && chatFilter?.kind !== 'allChats' && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <HeaderIconButton icon={<MoreHorizontal className="h-4 w-4" />} />
+                          </DropdownMenuTrigger>
+                          <StyledDropdownMenuContent align="end" light>
+                            <StyledDropdownMenuItem
+                              onClick={() => {
+                                setSearchActive(true)
+                              }}
+                            >
+                              <Search className="h-3.5 w-3.5" />
+                              <span className="flex-1">Search</span>
+                            </StyledDropdownMenuItem>
+                            <StyledDropdownMenuSeparator />
+                            <StyledDropdownMenuItem
+                              onClick={() => {
+                                window.electronAPI?.openUrl(getDocUrl('statuses'))
+                              }}
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                              <span className="flex-1">Learn More</span>
+                            </StyledDropdownMenuItem>
+                          </StyledDropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                      {/* Add Source button (only for sources mode) - uses filter-aware edit config */}
+                      {isSourcesNavigation(navState) && activeWorkspace && (
+                        <EditPopover
+                          trigger={
+                            <HeaderIconButton
+                              icon={<Plus className="h-4 w-4" />}
+                              tooltip="Add Source"
+                              data-tutorial="add-source-button"
+                            />
+                          }
+                          {...getEditConfig(
+                            sourceFilter?.kind === 'type' ? `add-source-${sourceFilter.sourceType}` as EditContextKey : 'add-source',
+                            activeWorkspace.rootPath
+                          )}
+                        />
+                      )}
+                      {/* Add Skill button (only for skills mode) */}
+                      {isSkillsNavigation(navState) && activeWorkspace && (
+                        <EditPopover
+                          trigger={
+                            <HeaderIconButton
+                              icon={<Plus className="h-4 w-4" />}
+                              tooltip="Add Skill"
+                              data-tutorial="add-skill-button"
+                            />
+                          }
+                          {...getEditConfig('add-skill', activeWorkspace.rootPath)}
+                        />
+                      )}
+                    </>
+                  }
+                />
+                {/* Content: SessionList, SourcesListPanel, or SettingsNavigator based on navigation state */}
+                {isSourcesNavigation(navState) && (
+                  /* Sources List - filtered by type if sourceFilter is active */
+                  <SourcesListPanel
+                    sources={sources}
+                    sourceFilter={sourceFilter}
+                    workspaceRootPath={activeWorkspace?.rootPath}
+                    onDeleteSource={handleDeleteSource}
+                    onSourceClick={handleSourceSelect}
+                    selectedSourceSlug={isSourcesNavigation(navState) && navState.details ? navState.details.sourceSlug : null}
+                    localMcpEnabled={localMcpEnabled}
+                  />
+                )}
+                {isSkillsNavigation(navState) && activeWorkspaceId && (
+                  /* Skills List */
+                  <SkillsListPanel
+                    skills={skills}
+                    workspaceId={activeWorkspaceId}
+                    workspaceRootPath={activeWorkspace?.rootPath}
+                    onSkillClick={handleSkillSelect}
+                    onDeleteSkill={handleDeleteSkill}
+                    selectedSkillSlug={isSkillsNavigation(navState) && navState.details ? navState.details.skillSlug : null}
+                  />
+                )}
+                {isSettingsNavigation(navState) && (
+                  /* Settings Navigator */
+                  <SettingsNavigator
+                    selectedSubpage={navState.subpage}
+                    onSelectSubpage={(subpage) => handleSettingsClick(subpage)}
+                  />
+                )}
+                {isChatsNavigation(navState) && (
+                  /* Sessions List */
+                  <>
+                    {/* SessionList: Scrollable list of session cards */}
+                    {/* Key on sidebarMode forces full remount when switching views, skipping animations */}
+                    <SessionList
+                      key={chatFilter?.kind}
+                      items={filteredSessionMetas}
+                      onDelete={handleDeleteSession}
+                      onFlag={onFlagSession}
+                      onUnflag={onUnflagSession}
+                      onMarkUnread={onMarkSessionUnread}
+                      onTodoStateChange={onTodoStateChange}
+                      onRename={onRenameSession}
+                      onFocusChatInput={focusChatInput}
+                      onSessionSelect={(selectedMeta) => {
+                        // Navigate to the session via central routing (with filter context)
+                        if (!chatFilter || chatFilter.kind === 'allChats') {
+                          navigate(routes.view.allChats(selectedMeta.id))
+                        } else if (chatFilter.kind === 'flagged') {
+                          navigate(routes.view.flagged(selectedMeta.id))
+                        } else if (chatFilter.kind === 'state') {
+                          navigate(routes.view.state(chatFilter.stateId, selectedMeta.id))
+                        } else if (chatFilter.kind === 'label') {
+                          navigate(routes.view.label(chatFilter.labelId, selectedMeta.id))
+                        } else if (chatFilter.kind === 'view') {
+                          navigate(routes.view.view(chatFilter.viewId, selectedMeta.id))
+                        }
+                      }}
+                      onOpenInNewWindow={(selectedMeta) => {
+                        if (activeWorkspaceId) {
+                          window.electronAPI.openSessionInNewWindow(activeWorkspaceId, selectedMeta.id)
+                        }
+                      }}
+                      onNavigateToView={(view) => {
+                        if (view === 'allChats') {
+                          navigate(routes.view.allChats())
+                        } else if (view === 'flagged') {
+                          navigate(routes.view.flagged())
+                        }
+                      }}
+                      sessionOptions={sessionOptions}
+                      searchActive={searchActive}
+                      searchQuery={searchQuery}
+                      onSearchChange={setSearchQuery}
+                      onSearchClose={() => {
+                        setSearchActive(false)
+                        setSearchQuery('')
+                      }}
+                      todoStates={effectiveTodoStates}
+                      evaluateViews={evaluateViews}
+                      labels={labelConfigs}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Session List Resize Handle (hidden in focused mode) */}
+            {!isFocusedMode && (
+              <div
+                ref={sessionListHandleRef}
+                onMouseDown={(e) => { e.preventDefault(); setIsResizing('session-list') }}
+                onMouseMove={(e) => {
+                  if (sessionListHandleRef.current) {
+                    const rect = sessionListHandleRef.current.getBoundingClientRect()
+                    setSessionListHandleY(e.clientY - rect.top)
+                  }
+                }}
+                onMouseLeave={() => { if (isResizing !== 'session-list') setSessionListHandleY(null) }}
+                className="relative w-0 h-full cursor-col-resize flex justify-center shrink-0"
+              >
+                {/* Touch area */}
+                <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex justify-center cursor-col-resize">
+                  <div
+                    className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5"
+                    style={getResizeGradientStyle(sessionListHandleY)}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* === MAIN CONTENT PANEL === */}
+            <div className={cn(
+              "flex-1 overflow-hidden min-w-0 bg-foreground-2 shadow-middle",
+              isFocusedMode ? "rounded-[14px]" : (isRightSidebarVisible ? "rounded-l-[10px] rounded-r-[10px]" : "rounded-l-[10px] rounded-r-[14px]")
+            )}>
+              <MainContentPanel isFocusedMode={isFocusedMode} />
+            </div>
+
+            {/* Right Sidebar - Inline Mode (≥ 920px) */}
+            {!isFocusedMode && !shouldUseOverlay && (
+              <>
+                {/* Resize Handle */}
+                {isRightSidebarVisible && (
+                  <div
+                    ref={rightSidebarHandleRef}
+                    onMouseDown={(e) => { e.preventDefault(); setIsResizing('right-sidebar') }}
+                    onMouseMove={(e) => {
+                      if (rightSidebarHandleRef.current) {
+                        const rect = rightSidebarHandleRef.current.getBoundingClientRect()
+                        setRightSidebarHandleY(e.clientY - rect.top)
+                      }
+                    }}
+                    onMouseLeave={() => { if (isResizing !== 'right-sidebar') setRightSidebarHandleY(null) }}
+                    className="relative w-0 h-full cursor-col-resize flex justify-center shrink-0"
+                  >
+                    {/* Touch area */}
+                    <div className="absolute inset-y-0 -left-1.5 -right-1.5 flex justify-center cursor-col-resize">
+                      <div
+                        className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5"
+                        style={getResizeGradientStyle(rightSidebarHandleY)}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Inline Sidebar */}
                 <motion.div
                   initial={false}
                   animate={{
-                    x: isRightSidebarVisible ? 0 : rightSidebarWidth + PANEL_PANEL_SPACING / 2,
-                    opacity: isRightSidebarVisible ? 1 : 0,
+                    width: isRightSidebarVisible ? rightSidebarWidth : 0,
+                    marginLeft: isRightSidebarVisible ? 0 : -PANEL_PANEL_SPACING / 2,
                   }}
                   transition={isResizing === 'right-sidebar' || skipRightSidebarAnimation ? { duration: 0 } : springTransition}
-                  className="h-full bg-foreground-2 shadow-middle rounded-l-[10px] rounded-r-[14px]"
-                  style={{ width: rightSidebarWidth }}
+                  className="h-full shrink-0 overflow-visible"
                 >
-                  <RightSidebar
-                    panel={{ type: 'sessionMetadata' }}
-                    sessionId={isChatsNavigation(navState) && navState.details ? navState.details.sessionId : undefined}
-                    closeButton={rightSidebarCloseButton}
-                  />
-                </motion.div>
-              </motion.div>
-            </>
-          )}
-
-          {/* Right Sidebar - Overlay Mode (< 920px) */}
-          {!isFocusedMode && shouldUseOverlay && (
-            <AnimatePresence>
-              {isRightSidebarVisible && (
-                <>
-                  {/* Backdrop */}
                   <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={skipRightSidebarAnimation ? { duration: 0 } : { duration: 0.2 }}
-                    className="fixed inset-0 bg-black/25 z-overlay"
-                    onClick={() => setIsRightSidebarVisible(false)}
-                  />
-                  {/* Drawer panel */}
-                  <motion.div
-                    initial={{ x: 316 }}
-                    animate={{ x: 0 }}
-                    exit={{ x: 316 }}
-                    transition={skipRightSidebarAnimation ? { duration: 0 } : springTransition}
-                    className="fixed inset-y-0 right-0 w-[316px] h-screen z-overlay p-1.5"
+                    initial={false}
+                    animate={{
+                      x: isRightSidebarVisible ? 0 : rightSidebarWidth + PANEL_PANEL_SPACING / 2,
+                      opacity: isRightSidebarVisible ? 1 : 0,
+                    }}
+                    transition={isResizing === 'right-sidebar' || skipRightSidebarAnimation ? { duration: 0 } : springTransition}
+                    className="h-full bg-foreground-2 shadow-middle rounded-l-[10px] rounded-r-[14px]"
+                    style={{ width: rightSidebarWidth }}
                   >
-                    <div className="h-full bg-foreground-2 overflow-hidden shadow-strong rounded-[12px]">
-                      <RightSidebar
-                        panel={{ type: 'sessionMetadata' }}
-                        sessionId={isChatsNavigation(navState) && navState.details ? navState.details.sessionId : undefined}
-                        closeButton={rightSidebarCloseButton}
-                      />
-                    </div>
+                    <RightSidebar
+                      panel={{ type: 'sessionMetadata' }}
+                      sessionId={isChatsNavigation(navState) && navState.details ? navState.details.sessionId : undefined}
+                      closeButton={rightSidebarCloseButton}
+                    />
                   </motion.div>
-                </>
-              )}
-            </AnimatePresence>
-          )}
-        </div>
-      </div>
+                </motion.div>
+              </>
+            )}
 
-      {/* ============================================================================
+            {/* Right Sidebar - Overlay Mode (< 920px) */}
+            {!isFocusedMode && shouldUseOverlay && (
+              <AnimatePresence>
+                {isRightSidebarVisible && (
+                  <>
+                    {/* Backdrop */}
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={skipRightSidebarAnimation ? { duration: 0 } : { duration: 0.2 }}
+                      className="fixed inset-0 bg-black/25 z-overlay"
+                      onClick={() => setIsRightSidebarVisible(false)}
+                    />
+                    {/* Drawer panel */}
+                    <motion.div
+                      initial={{ x: 316 }}
+                      animate={{ x: 0 }}
+                      exit={{ x: 316 }}
+                      transition={skipRightSidebarAnimation ? { duration: 0 } : springTransition}
+                      className="fixed inset-y-0 right-0 w-[316px] h-screen z-overlay p-1.5"
+                    >
+                      <div className="h-full bg-foreground-2 overflow-hidden shadow-strong rounded-[12px]">
+                        <RightSidebar
+                          panel={{ type: 'sessionMetadata' }}
+                          sessionId={isChatsNavigation(navState) && navState.details ? navState.details.sessionId : undefined}
+                          closeButton={rightSidebarCloseButton}
+                        />
+                      </div>
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            )}
+          </div>
+        </div>
+
+        {/* ============================================================================
        * CONTEXT MENU TRIGGERED EDIT POPOVERS
        * ============================================================================
        * These EditPopovers are opened programmatically from sidebar context menus.
@@ -2024,111 +2037,111 @@ function AppShellContent({
        * so the popover appears near the triggering item rather than at a fixed location.
        * modal={true} prevents auto-close when focus shifts after context menu closes.
        */}
-      {activeWorkspace && (
-        <>
-          {/* Configure Statuses EditPopover - anchored near sidebar */}
-          <EditPopover
-            open={editPopoverOpen === 'statuses'}
-            onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'statuses' : null)}
-            modal={true}
-            trigger={
-              <div
-                className="fixed w-0 h-0 pointer-events-none"
-                style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
-                aria-hidden="true"
-              />
-            }
-            side="bottom"
-            align="start"
-            {...getEditConfig('edit-statuses', activeWorkspace.rootPath)}
-          />
-          {/* Configure Labels EditPopover - anchored near sidebar */}
-          <EditPopover
-            open={editPopoverOpen === 'labels'}
-            onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'labels' : null)}
-            modal={true}
-            trigger={
-              <div
-                className="fixed w-0 h-0 pointer-events-none"
-                style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
-                aria-hidden="true"
-              />
-            }
-            side="bottom"
-            align="start"
-            {...getEditConfig('edit-labels', activeWorkspace.rootPath)}
-          />
-          {/* Edit Views EditPopover - anchored near sidebar */}
-          <EditPopover
-            open={editPopoverOpen === 'views'}
-            onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'views' : null)}
-            modal={true}
-            trigger={
-              <div
-                className="fixed w-0 h-0 pointer-events-none"
-                style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
-                aria-hidden="true"
-              />
-            }
-            side="bottom"
-            align="start"
-            {...getEditConfig('edit-views', activeWorkspace.rootPath)}
-          />
-          {/* Add Source EditPopovers - one for each variant (generic + filter-specific)
-           * editPopoverOpen can be: 'add-source', 'add-source-api', 'add-source-mcp', 'add-source-local'
-           * Each variant uses its corresponding EditContextKey for filter-aware agent context */}
-          {(['add-source', 'add-source-api', 'add-source-mcp', 'add-source-local'] as const).map((variant) => (
+        {activeWorkspace && (
+          <>
+            {/* Configure Statuses EditPopover - anchored near sidebar */}
             <EditPopover
-              key={variant}
-              open={editPopoverOpen === variant}
-              onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? variant : null)}
+              open={editPopoverOpen === 'statuses'}
+              onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'statuses' : null)}
               modal={true}
               trigger={
                 <div
-                  className="fixed top-[120px] w-0 h-0 pointer-events-none"
-                  style={{ left: sidebarWidth + 20 }}
+                  className="fixed w-0 h-0 pointer-events-none"
+                  style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
                   aria-hidden="true"
                 />
               }
               side="bottom"
               align="start"
-              {...getEditConfig(variant, activeWorkspace.rootPath)}
+              {...getEditConfig('edit-statuses', activeWorkspace.rootPath)}
             />
-          ))}
-          {/* Add Skill EditPopover */}
-          <EditPopover
-            open={editPopoverOpen === 'add-skill'}
-            onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'add-skill' : null)}
-            modal={true}
-            trigger={
-              <div
-                className="fixed w-0 h-0 pointer-events-none"
-                style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
-                aria-hidden="true"
+            {/* Configure Labels EditPopover - anchored near sidebar */}
+            <EditPopover
+              open={editPopoverOpen === 'labels'}
+              onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'labels' : null)}
+              modal={true}
+              trigger={
+                <div
+                  className="fixed w-0 h-0 pointer-events-none"
+                  style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
+                  aria-hidden="true"
+                />
+              }
+              side="bottom"
+              align="start"
+              {...getEditConfig('edit-labels', activeWorkspace.rootPath)}
+            />
+            {/* Edit Views EditPopover - anchored near sidebar */}
+            <EditPopover
+              open={editPopoverOpen === 'views'}
+              onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'views' : null)}
+              modal={true}
+              trigger={
+                <div
+                  className="fixed w-0 h-0 pointer-events-none"
+                  style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
+                  aria-hidden="true"
+                />
+              }
+              side="bottom"
+              align="start"
+              {...getEditConfig('edit-views', activeWorkspace.rootPath)}
+            />
+            {/* Add Source EditPopovers - one for each variant (generic + filter-specific)
+           * editPopoverOpen can be: 'add-source', 'add-source-api', 'add-source-mcp', 'add-source-local'
+           * Each variant uses its corresponding EditContextKey for filter-aware agent context */}
+            {(['add-source', 'add-source-api', 'add-source-mcp', 'add-source-local'] as const).map((variant) => (
+              <EditPopover
+                key={variant}
+                open={editPopoverOpen === variant}
+                onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? variant : null)}
+                modal={true}
+                trigger={
+                  <div
+                    className="fixed top-[120px] w-0 h-0 pointer-events-none"
+                    style={{ left: sidebarWidth + 20 }}
+                    aria-hidden="true"
+                  />
+                }
+                side="bottom"
+                align="start"
+                {...getEditConfig(variant, activeWorkspace.rootPath)}
               />
-            }
-            side="bottom"
-            align="start"
-            {...getEditConfig('add-skill', activeWorkspace.rootPath)}
-          />
-          {/* Add Label EditPopover - triggered from "Add New Label" context menu on labels */}
-          <EditPopover
-            open={editPopoverOpen === 'add-label'}
-            onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'add-label' : null)}
-            modal={true}
-            trigger={
-              <div
-                className="fixed w-0 h-0 pointer-events-none"
-                style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
-                aria-hidden="true"
-              />
-            }
-            side="bottom"
-            align="start"
-            {...getEditConfig('add-label', activeWorkspace.rootPath)}
-          />
-        </>
-      )}
+            ))}
+            {/* Add Skill EditPopover */}
+            <EditPopover
+              open={editPopoverOpen === 'add-skill'}
+              onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'add-skill' : null)}
+              modal={true}
+              trigger={
+                <div
+                  className="fixed w-0 h-0 pointer-events-none"
+                  style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
+                  aria-hidden="true"
+                />
+              }
+              side="bottom"
+              align="start"
+              {...getEditConfig('add-skill', activeWorkspace.rootPath)}
+            />
+            {/* Add Label EditPopover - triggered from "Add New Label" context menu on labels */}
+            <EditPopover
+              open={editPopoverOpen === 'add-label'}
+              onOpenChange={(isOpen) => setEditPopoverOpen(isOpen ? 'add-label' : null)}
+              modal={true}
+              trigger={
+                <div
+                  className="fixed w-0 h-0 pointer-events-none"
+                  style={{ left: sidebarWidth + 20, top: editPopoverAnchorY.current }}
+                  aria-hidden="true"
+                />
+              }
+              side="bottom"
+              align="start"
+              {...getEditConfig('add-label', activeWorkspace.rootPath)}
+            />
+          </>
+        )}
 
       </TooltipProvider>
     </AppShellProvider>
