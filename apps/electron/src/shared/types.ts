@@ -145,6 +145,32 @@ export interface RefreshTitleResult {
   error?: string
 }
 
+/**
+ * OpenRouter Model definition
+ */
+export interface OpenRouterModel {
+  id: string
+  name: string
+  description?: string
+  pricing: {
+    prompt: string
+    completion: string
+  }
+  context_length: number
+  architecture: {
+    modality: string
+    tokenizer: string
+    instruct_type: string | null
+  }
+  top_provider: {
+    context_length: number | null
+    max_completion_tokens: number | null
+    is_moderated: boolean
+  }
+  per_request_limits: unknown
+  supported_parameters?: string[]
+}
+
 
 // Re-export permission types from core, extended with sessionId for multi-session context
 export type { PermissionRequest as BasePermissionRequest } from '@craft-agent/core/types';
@@ -265,6 +291,8 @@ export interface Session {
   id: string
   workspaceId: string
   workspaceName: string
+  /** Session runtime discriminator ('claude' | 'openrouter-chat') */
+  runtime?: 'claude' | 'openrouter-chat'
   name?: string  // User-defined or AI-generated session name
   /** Preview of first user message (from JSONL header, for lazy-loaded sessions) */
   preview?: string
@@ -348,6 +376,10 @@ export interface CreateSessionOptions {
    * - Absolute path string: Use this specific path
    */
   workingDirectory?: string | 'user_default' | 'none'
+  /** Runtime type ('claude' or 'openrouter-chat') */
+  runtime?: 'claude' | 'openrouter-chat'
+  /** Model override for the session */
+  model?: string
 }
 
 // Events sent from main to renderer
@@ -597,7 +629,7 @@ export const IPC_CHANNELS = {
   SOURCES_START_OAUTH: 'sources:startOAuth',
   SOURCES_SAVE_CREDENTIALS: 'sources:saveCredentials',
   SOURCES_CHANGED: 'sources:changed',
-  
+
   // Source permissions config
   SOURCES_GET_PERMISSIONS: 'sources:getPermissions',
   // Workspace permissions config (for Explore mode)
@@ -670,6 +702,24 @@ export const IPC_CHANNELS = {
 
   // Git operations
   GET_GIT_BRANCH: 'git:getBranch',
+
+  // Sources - Call MCP Tool
+  SOURCES_CALL_MCP_TOOL: 'sources:callMcpTool',
+
+  // Apple Reminders
+  APPLE_REMINDERS_GET: 'appleReminders:get',
+  APPLE_REMINDERS_COMPLETE: 'appleReminders:complete',
+
+  // OpenRouter
+  OPENROUTER_GET_MODELS: 'openRouter:getModels',
+  OPENROUTER_GET_API_KEY: 'openRouter:getApiKey',
+  OPENROUTER_SET_API_KEY: 'openRouter:setApiKey',
+  OPENROUTER_DELETE_API_KEY: 'openRouter:deleteApiKey',
+
+  // OpenAI
+  OPENAI_GET_OAUTH_CONFIGURED: 'openAI:getOAuthConfigured',
+  OPENAI_IMPORT_CODEX_AUTH: 'openAI:importCodexAuth',
+  OPENAI_DELETE_OAUTH: 'openAI:deleteOAuth',
 } as const
 
 // Re-import types for ElectronAPI
@@ -785,6 +835,11 @@ export interface ElectronAPI {
   exchangeClaudeCode(code: string): Promise<ClaudeOAuthResult>
   hasClaudeOAuthState(): Promise<boolean>
   clearClaudeOAuthState(): Promise<{ success: boolean }>
+
+  // OpenAI / Codex
+  getOpenAIOAuthConfigured(): Promise<boolean>
+  importCodexAuth(): Promise<{ success: boolean; error?: string }>
+  deleteOpenAIOAuth(): Promise<void>
 
   // Settings - API Setup
   getApiSetup(): Promise<ApiSetupInfo>
@@ -904,6 +959,11 @@ export interface ElectronAPI {
 
   // Git operations
   getGitBranch(dirPath: string): Promise<string | null>
+
+  // OpenRouter
+  getOpenRouterModels(): Promise<OpenRouterModel[]>
+  getOpenRouterApiKey(): Promise<string | null>
+  setOpenRouterApiKey(apiKey: string): Promise<void>
 }
 
 /**
@@ -1019,6 +1079,17 @@ export interface ChatsNavigationState {
 }
 
 /**
+ * Chat mode navigation state (standalone chat window or mode)
+ */
+export interface ChatNavigationState {
+  navigator: 'chat'
+  /** Selected chat session details, or null for empty state */
+  details: { type: 'chat'; sessionId: string } | null
+  /** Optional right sidebar panel state */
+  rightSidebar?: RightSidebarPanel
+}
+
+/**
  * Source type filter for sources navigation (e.g., show only APIs, MCPs, or Local sources)
  */
 export interface SourceFilter {
@@ -1071,6 +1142,7 @@ export interface SkillsNavigationState {
  */
 export type NavigationState =
   | ChatsNavigationState
+  | ChatNavigationState
   | SourcesNavigationState
   | SettingsNavigationState
   | SkillsNavigationState
@@ -1081,6 +1153,13 @@ export type NavigationState =
 export const isChatsNavigation = (
   state: NavigationState
 ): state is ChatsNavigationState => state.navigator === 'chats'
+
+/**
+ * Type guard to check if state is chat mode navigation
+ */
+export const isChatNavigation = (
+  state: NavigationState
+): state is ChatNavigationState => state.navigator === 'chat'
 
 /**
  * Type guard to check if state is sources navigation
@@ -1131,6 +1210,12 @@ export const getNavigationStateKey = (state: NavigationState): string => {
   if (state.navigator === 'settings') {
     return `settings:${state.subpage}`
   }
+  if (state.navigator === 'chat') {
+    if (state.details) {
+      return `chat/chat/${state.details.sessionId}`
+    }
+    return 'chat'
+  }
   // Chats
   const f = state.filter
   let base: string
@@ -1149,6 +1234,14 @@ export const getNavigationStateKey = (state: NavigationState): string => {
  * Returns null if the key is invalid
  */
 export const parseNavigationStateKey = (key: string): NavigationState | null => {
+  // Handle chat mode
+  if (key.startsWith('chat/chat/')) {
+    const sessionId = key.slice(10)
+    if (sessionId) {
+      return { navigator: 'chat', details: { type: 'chat', sessionId } }
+    }
+  }
+
   // Handle sources
   if (key === 'sources') return { navigator: 'sources', details: null }
   if (key.startsWith('sources/source/')) {

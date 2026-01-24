@@ -268,242 +268,251 @@ function SessionItem({
       <ContextMenu modal={true} onOpenChange={setContextMenuOpen}>
         <ContextMenuTrigger asChild>
           <div className="session-content relative group select-none pl-2 mr-2">
-        {/* Todo State Icon - positioned absolutely, outside the button */}
-        <Popover modal={true} open={todoMenuOpen} onOpenChange={setTodoMenuOpen}>
-          <PopoverTrigger asChild>
-            <div className="absolute left-4 top-3.5 z-10">
-              <div
-                className={cn(
-                  "w-4 h-4 flex items-center justify-center rounded-full transition-colors cursor-pointer",
-                  "hover:bg-foreground/5",
-                )}
-                style={{ color: getStateColor(currentTodoState, todoStates) ?? 'var(--foreground)' }}
-                role="button"
-                aria-haspopup="menu"
-                aria-expanded={todoMenuOpen}
-                aria-label="Change todo state"
+            {/* Todo State Icon - positioned absolutely, outside the button */}
+            <Popover modal={true} open={todoMenuOpen} onOpenChange={setTodoMenuOpen}>
+              <PopoverTrigger asChild>
+                <div className="absolute left-4 top-3.5 z-10">
+                  <div
+                    className={cn(
+                      "w-4 h-4 flex items-center justify-center rounded-full transition-colors cursor-pointer",
+                      "hover:bg-foreground/5",
+                    )}
+                    style={{ color: getStateColor(currentTodoState, todoStates) ?? 'var(--foreground)' }}
+                    role="button"
+                    aria-haspopup="menu"
+                    aria-expanded={todoMenuOpen}
+                    aria-label="Change todo state"
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                    }}
+                  >
+                    <div className="w-4 h-4 flex items-center justify-center [&>svg]:w-full [&>svg]:h-full [&>img]:w-full [&>img]:h-full [&>span]:text-base">
+                      {getStateIcon(currentTodoState, todoStates)}
+                    </div>
+                  </div>
+                </div>
+              </PopoverTrigger>
+              <PopoverContent
+                className="w-auto p-0 border-0 shadow-none bg-transparent"
+                align="start"
+                side="bottom"
+                sideOffset={4}
                 onContextMenu={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
                 }}
               >
-                <div className="w-4 h-4 flex items-center justify-center [&>svg]:w-full [&>svg]:h-full [&>img]:w-full [&>img]:h-full [&>span]:text-base">
-                  {getStateIcon(currentTodoState, todoStates)}
+                <TodoStateMenu
+                  activeState={currentTodoState}
+                  onSelect={handleTodoStateSelect}
+                  states={todoStates}
+                />
+              </PopoverContent>
+            </Popover>
+            {/* Main content button */}
+            <button
+              {...itemProps}
+              className={cn(
+                "flex w-full items-start gap-2 pl-2 pr-4 py-3 text-left text-sm outline-none rounded-[8px]",
+                // Fast hover transition (75ms vs default 150ms), selection is instant
+                "transition-[background-color] duration-75",
+                isSelected
+                  ? "bg-foreground/5 hover:bg-foreground/7"
+                  : "hover:bg-foreground/2"
+              )}
+              onMouseDown={handleClick}
+              onKeyDown={(e) => {
+                itemProps.onKeyDown(e)
+                onKeyDown(e, item)
+              }}
+            >
+              {/* Spacer for todo icon */}
+              <div className="w-4 h-5 shrink-0" />
+              {/* Content column */}
+              <div className="flex flex-col gap-1.5 min-w-0 flex-1">
+                {/* Title - up to 2 lines, with shimmer during async operations (sharing, title regen, etc.) */}
+                <div className="flex items-start gap-2 w-full pr-6 min-w-0">
+                  <div className={cn(
+                    "font-medium font-sans line-clamp-2 min-w-0 -mb-[2px]",
+                    item.isAsyncOperationOngoing && "animate-shimmer-text"
+                  )}>
+                    {searchQuery ? highlightMatch(getSessionTitle(item), searchQuery) : getSessionTitle(item)}
+                  </div>
                 </div>
-              </div>
-            </div>
-          </PopoverTrigger>
-          <PopoverContent
-            className="w-auto p-0 border-0 shadow-none bg-transparent"
-            align="start"
-            side="bottom"
-            sideOffset={4}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-            }}
-          >
-            <TodoStateMenu
-              activeState={currentTodoState}
-              onSelect={handleTodoStateSelect}
-              states={todoStates}
-            />
-          </PopoverContent>
-        </Popover>
-        {/* Main content button */}
-        <button
-          {...itemProps}
-          className={cn(
-            "flex w-full items-start gap-2 pl-2 pr-4 py-3 text-left text-sm outline-none rounded-[8px]",
-            // Fast hover transition (75ms vs default 150ms), selection is instant
-            "transition-[background-color] duration-75",
-            isSelected
-              ? "bg-foreground/5 hover:bg-foreground/7"
-              : "hover:bg-foreground/2"
-          )}
-          onMouseDown={handleClick}
-          onKeyDown={(e) => {
-            itemProps.onKeyDown(e)
-            onKeyDown(e, item)
-          }}
-        >
-          {/* Spacer for todo icon */}
-          <div className="w-4 h-5 shrink-0" />
-          {/* Content column */}
-          <div className="flex flex-col gap-1.5 min-w-0 flex-1">
-            {/* Title - up to 2 lines, with shimmer during async operations (sharing, title regen, etc.) */}
-            <div className="flex items-start gap-2 w-full pr-6 min-w-0">
-              <div className={cn(
-                "font-medium font-sans line-clamp-2 min-w-0 -mb-[2px]",
-                item.isAsyncOperationOngoing && "animate-shimmer-text"
-              )}>
-                {searchQuery ? highlightMatch(getSessionTitle(item), searchQuery) : getSessionTitle(item)}
-              </div>
-            </div>
-            {/* Subtitle row — badges scroll horizontally when they overflow */}
-            <div className="flex items-center gap-1.5 text-xs text-foreground/70 w-full -mb-[2px] min-w-0">
-              {/* Fixed indicators (Spinner + New) — always visible */}
-              {item.isProcessing && (
-                <Spinner className="text-[8px] text-foreground shrink-0" />
-              )}
-              {!item.isProcessing && hasUnreadMessages(item) && (
-                <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded bg-accent text-white">
-                  New
-                </span>
-              )}
+                {/* Subtitle row — badges scroll horizontally when they overflow */}
+                <div className="flex items-center gap-1.5 text-xs text-foreground/70 w-full -mb-[2px] min-w-0">
+                  {/* Fixed indicators (Spinner + New) — always visible */}
+                  {item.isProcessing && (
+                    <Spinner className="text-[8px] text-foreground shrink-0" />
+                  )}
+                  {!item.isProcessing && hasUnreadMessages(item) && (
+                    <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded bg-accent text-white">
+                      New
+                    </span>
+                  )}
 
-              {/* Scrollable badges container — horizontal scroll with hidden scrollbar,
+                  {/* Scrollable badges container — horizontal scroll with hidden scrollbar,
                   right-edge gradient mask to hint at overflow */}
-              <div
-                className="flex-1 flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-hide pr-4"
-                style={{ maskImage: 'linear-gradient(to right, black calc(100% - 16px), transparent 100%)', WebkitMaskImage: 'linear-gradient(to right, black calc(100% - 16px), transparent 100%)' }}
-              >
-                {item.isFlagged && (
-                  <span className="shrink-0 h-[18px] w-[18px] flex items-center justify-center rounded bg-foreground/5">
-                    <Flag className="h-[10px] w-[10px] text-info fill-info" />
-                  </span>
-                )}
-                {item.lastMessageRole === 'plan' && (
-                  <span className="shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded bg-success/10 text-success flex items-center whitespace-nowrap">
-                    Plan
-                  </span>
-                )}
-                {permissionMode && (
-                  <span
-                    className={cn(
-                      "shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded flex items-center whitespace-nowrap",
-                      permissionMode === 'safe' && "bg-foreground/5 text-foreground/60",
-                      permissionMode === 'ask' && "bg-info/10 text-info",
-                      permissionMode === 'allow-all' && "bg-accent/10 text-accent"
-                    )}
+                  <div
+                    className="flex-1 flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-hide pr-4"
+                    style={{ maskImage: 'linear-gradient(to right, black calc(100% - 16px), transparent 100%)', WebkitMaskImage: 'linear-gradient(to right, black calc(100% - 16px), transparent 100%)' }}
                   >
-                    {PERMISSION_MODE_CONFIG[permissionMode].shortName}
-                  </span>
-                )}
-                {/* Label badges — solid color via color-mix in sRGB */}
-                {resolvedLabels.map(label => {
-                  const color = label.color ? resolveEntityColor(label.color, isDark) : null
-                  return (
-                    <span
-                      key={label.id}
-                      className="shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded flex items-center whitespace-nowrap"
-                      style={color ? {
-                        backgroundColor: `color-mix(in srgb, ${color} 6%, transparent)`,
-                        color: `color-mix(in srgb, ${color} 80%, transparent)`,
-                      } : {
-                        backgroundColor: 'rgba(var(--foreground-rgb), 0.05)',
-                        color: 'rgba(var(--foreground-rgb), 0.6)',
-                      }}
-                    >
-                      {label.name}
-                    </span>
-                  )
-                })}
-                {item.sharedUrl && (
-                  <DropdownMenu modal={true}>
-                    <DropdownMenuTrigger asChild>
-                      <span
-                        className="shrink-0 h-[18px] w-[18px] flex items-center justify-center rounded bg-foreground/5 text-foreground/70 cursor-pointer hover:bg-foreground/10"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <CloudUpload className="h-[10px] w-[10px]" />
+                    {item.isFlagged && (
+                      <span className="shrink-0 h-[18px] w-[18px] flex items-center justify-center rounded bg-foreground/5">
+                        <Flag className="h-[10px] w-[10px] text-info fill-info" />
                       </span>
-                    </DropdownMenuTrigger>
-                    <StyledDropdownMenuContent align="start">
-                      <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(item.sharedUrl!)}>
-                        <Globe />
-                        Open in Browser
-                      </StyledDropdownMenuItem>
-                      <StyledDropdownMenuItem onClick={async () => {
-                        await navigator.clipboard.writeText(item.sharedUrl!)
-                        toast.success('Link copied to clipboard')
-                      }}>
-                        <Copy />
-                        Copy Link
-                      </StyledDropdownMenuItem>
-                      <StyledDropdownMenuItem onClick={async () => {
-                        const result = await window.electronAPI.sessionCommand(item.id, { type: 'updateShare' })
-                        if (result?.success) {
-                          toast.success('Share updated')
-                        } else {
-                          toast.error('Failed to update share', { description: result?.error })
-                        }
-                      }}>
-                        <RefreshCw />
-                        Update Share
-                      </StyledDropdownMenuItem>
-                      <StyledDropdownMenuSeparator />
-                      <StyledDropdownMenuItem onClick={async () => {
-                        const result = await window.electronAPI.sessionCommand(item.id, { type: 'revokeShare' })
-                        if (result?.success) {
-                          toast.success('Sharing stopped')
-                        } else {
-                          toast.error('Failed to stop sharing', { description: result?.error })
-                        }
-                      }} variant="destructive">
-                        <Link2Off />
-                        Stop Sharing
-                      </StyledDropdownMenuItem>
-                    </StyledDropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </div>
-              {/* Timestamp — outside stacking container so it never overlaps badges.
+                    )}
+                    {item.lastMessageRole === 'plan' && (
+                      <span className="shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded bg-success/10 text-success flex items-center whitespace-nowrap">
+                        Plan
+                      </span>
+                    )}
+                    {permissionMode && (
+                      <span
+                        className={cn(
+                          "shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded flex items-center whitespace-nowrap",
+                          permissionMode === 'safe' && "bg-foreground/5 text-foreground/60",
+                          permissionMode === 'ask' && "bg-info/10 text-info",
+                          permissionMode === 'allow-all' && "bg-accent/10 text-accent"
+                        )}
+                      >
+                        {PERMISSION_MODE_CONFIG[permissionMode].shortName}
+                      </span>
+                    )}
+                    {item.runtime === 'openrouter-chat' ? (
+                      <span className="shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded flex items-center whitespace-nowrap bg-indigo-500/10 text-indigo-500">
+                        Chat Mode
+                      </span>
+                    ) : (
+                      <span className="shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded flex items-center whitespace-nowrap bg-emerald-500/10 text-emerald-500">
+                        Agent Mode
+                      </span>
+                    )}
+                    {/* Label badges — solid color via color-mix in sRGB */}
+                    {resolvedLabels.map(label => {
+                      const color = label.color ? resolveEntityColor(label.color, isDark) : null
+                      return (
+                        <span
+                          key={label.id}
+                          className="shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded flex items-center whitespace-nowrap"
+                          style={color ? {
+                            backgroundColor: `color-mix(in srgb, ${color} 6%, transparent)`,
+                            color: `color-mix(in srgb, ${color} 80%, transparent)`,
+                          } : {
+                            backgroundColor: 'rgba(var(--foreground-rgb), 0.05)',
+                            color: 'rgba(var(--foreground-rgb), 0.6)',
+                          }}
+                        >
+                          {label.name}
+                        </span>
+                      )
+                    })}
+                    {item.sharedUrl && (
+                      <DropdownMenu modal={true}>
+                        <DropdownMenuTrigger asChild>
+                          <span
+                            className="shrink-0 h-[18px] w-[18px] flex items-center justify-center rounded bg-foreground/5 text-foreground/70 cursor-pointer hover:bg-foreground/10"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <CloudUpload className="h-[10px] w-[10px]" />
+                          </span>
+                        </DropdownMenuTrigger>
+                        <StyledDropdownMenuContent align="start">
+                          <StyledDropdownMenuItem onClick={() => window.electronAPI.openUrl(item.sharedUrl!)}>
+                            <Globe />
+                            Open in Browser
+                          </StyledDropdownMenuItem>
+                          <StyledDropdownMenuItem onClick={async () => {
+                            await navigator.clipboard.writeText(item.sharedUrl!)
+                            toast.success('Link copied to clipboard')
+                          }}>
+                            <Copy />
+                            Copy Link
+                          </StyledDropdownMenuItem>
+                          <StyledDropdownMenuItem onClick={async () => {
+                            const result = await window.electronAPI.sessionCommand(item.id, { type: 'updateShare' })
+                            if (result?.success) {
+                              toast.success('Share updated')
+                            } else {
+                              toast.error('Failed to update share', { description: result?.error })
+                            }
+                          }}>
+                            <RefreshCw />
+                            Update Share
+                          </StyledDropdownMenuItem>
+                          <StyledDropdownMenuSeparator />
+                          <StyledDropdownMenuItem onClick={async () => {
+                            const result = await window.electronAPI.sessionCommand(item.id, { type: 'revokeShare' })
+                            if (result?.success) {
+                              toast.success('Sharing stopped')
+                            } else {
+                              toast.error('Failed to stop sharing', { description: result?.error })
+                            }
+                          }} variant="destructive">
+                            <Link2Off />
+                            Stop Sharing
+                          </StyledDropdownMenuItem>
+                        </StyledDropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </div>
+                  {/* Timestamp — outside stacking container so it never overlaps badges.
                   shrink-0 keeps it fixed-width; the badges container clips instead. */}
-              {item.lastMessageAt && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="shrink-0 text-[11px] text-foreground/40 whitespace-nowrap cursor-default">
-                      {formatDistanceToNowStrict(new Date(item.lastMessageAt), { locale: shortTimeLocale as Locale })}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" sideOffset={4}>
-                    {formatDistanceToNow(new Date(item.lastMessageAt), { addSuffix: true })}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-            </div>
-          </div>
-        </button>
-        {/* Action buttons - visible on hover or when menu is open */}
-        <div
-          className={cn(
-            "absolute right-2 top-2 transition-opacity z-10",
-            menuOpen || contextMenuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-          )}
-        >
-          {/* More menu */}
-          <div className="flex items-center rounded-[8px] overflow-hidden border border-transparent hover:border-border/50">
-            <DropdownMenu modal={true} onOpenChange={setMenuOpen}>
-              <DropdownMenuTrigger asChild>
-                <div className="p-1.5 hover:bg-foreground/10 data-[state=open]:bg-foreground/10 cursor-pointer">
-                  <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+                  {item.lastMessageAt && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="shrink-0 text-[11px] text-foreground/40 whitespace-nowrap cursor-default">
+                          {formatDistanceToNowStrict(new Date(item.lastMessageAt), { locale: shortTimeLocale as Locale })}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" sideOffset={4}>
+                        {formatDistanceToNow(new Date(item.lastMessageAt), { addSuffix: true })}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
                 </div>
-              </DropdownMenuTrigger>
-              <StyledDropdownMenuContent align="end">
-                <DropdownMenuProvider>
-                  <SessionMenu
-                    sessionId={item.id}
-                    sessionName={getSessionTitle(item)}
-                    isFlagged={item.isFlagged ?? false}
-                    sharedUrl={item.sharedUrl}
-                    hasMessages={hasMessages(item)}
-                    hasUnreadMessages={hasUnreadMessages(item)}
-                    currentTodoState={currentTodoState}
-                    todoStates={todoStates}
-                    onRename={() => onRenameClick(item.id, getSessionTitle(item))}
-                    onFlag={() => onFlag?.(item.id)}
-                    onUnflag={() => onUnflag?.(item.id)}
-                    onMarkUnread={() => onMarkUnread(item.id)}
-                    onTodoStateChange={(state) => onTodoStateChange(item.id, state)}
-                    onOpenInNewWindow={onOpenInNewWindow}
-                    onDelete={() => onDelete(item.id)}
-                  />
-                </DropdownMenuProvider>
-              </StyledDropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
+              </div>
+            </button>
+            {/* Action buttons - visible on hover or when menu is open */}
+            <div
+              className={cn(
+                "absolute right-2 top-2 transition-opacity z-10",
+                menuOpen || contextMenuOpen ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+              )}
+            >
+              {/* More menu */}
+              <div className="flex items-center rounded-[8px] overflow-hidden border border-transparent hover:border-border/50">
+                <DropdownMenu modal={true} onOpenChange={setMenuOpen}>
+                  <DropdownMenuTrigger asChild>
+                    <div className="p-1.5 hover:bg-foreground/10 data-[state=open]:bg-foreground/10 cursor-pointer">
+                      <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                  </DropdownMenuTrigger>
+                  <StyledDropdownMenuContent align="end">
+                    <DropdownMenuProvider>
+                      <SessionMenu
+                        sessionId={item.id}
+                        sessionName={getSessionTitle(item)}
+                        isFlagged={item.isFlagged ?? false}
+                        sharedUrl={item.sharedUrl}
+                        hasMessages={hasMessages(item)}
+                        hasUnreadMessages={hasUnreadMessages(item)}
+                        currentTodoState={currentTodoState}
+                        todoStates={todoStates}
+                        onRename={() => onRenameClick(item.id, getSessionTitle(item))}
+                        onFlag={() => onFlag?.(item.id)}
+                        onUnflag={() => onUnflag?.(item.id)}
+                        onMarkUnread={() => onMarkUnread(item.id)}
+                        onTodoStateChange={(state) => onTodoStateChange(item.id, state)}
+                        onOpenInNewWindow={onOpenInNewWindow}
+                        onDelete={() => onDelete(item.id)}
+                      />
+                    </DropdownMenuProvider>
+                  </StyledDropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </div>
           </div>
         </ContextMenuTrigger>
         {/* Context menu - same content as dropdown */}
@@ -960,7 +969,7 @@ export function SessionList({
                   />
                 )
               })}
-          </div>
+            </div>
           ))}
           {/* Load more sentinel - triggers infinite scroll */}
           {hasMore && (

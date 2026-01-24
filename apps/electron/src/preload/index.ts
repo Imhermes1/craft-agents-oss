@@ -408,6 +408,14 @@ const api: ElectronAPI = {
   },
   getGitBranch: (dirPath: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_GIT_BRANCH, dirPath),
+
+  // OpenRouter
+  getOpenRouterModels: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_GET_MODELS),
+  getOpenRouterApiKey: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_GET_API_KEY),
+  setOpenRouterApiKey: (apiKey: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_SET_API_KEY, apiKey),
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

@@ -57,6 +57,9 @@ interface UseOnboardingReturn {
   handleSubmitAuthCode: (code: string) => void
   handleCancelOAuth: () => void
 
+  // Codex
+  handleImportCodexAuth: () => void
+
   // Completion
   handleFinish: () => void
   handleCancel: () => void
@@ -70,6 +73,9 @@ function apiSetupMethodToAuthType(method: ApiSetupMethod): AuthType {
   switch (method) {
     case 'api_key': return 'api_key'
     case 'claude_oauth': return 'oauth_token'
+    case 'openrouter': return 'api_key'
+    // Codex uses its own auth flow but falls back to api_key type in config for now
+    case 'codex': return 'api_key'
   }
 }
 
@@ -352,6 +358,39 @@ export function useOnboarding({
     await window.electronAPI.clearClaudeOAuthState()
   }, [])
 
+  // Codex Auth Import
+  const handleImportCodexAuth = useCallback(async () => {
+    setState(s => ({ ...s, credentialStatus: 'validating', errorMessage: undefined }))
+
+    try {
+      const result = await window.electronAPI.importCodexAuth()
+
+      if (result.success) {
+        // Save dummy config to persist 'api_key' authType (Codex falls back to this)
+        // We use a dummy key because the actual token is stored in the secure store by importCodexAuth
+        await handleSaveConfig('codex-managed-auth')
+
+        setState(s => ({
+          ...s,
+          credentialStatus: 'success',
+          step: 'complete',
+        }))
+      } else {
+        setState(s => ({
+          ...s,
+          credentialStatus: 'error',
+          errorMessage: result.error || 'Failed to import credentials',
+        }))
+      }
+    } catch (error) {
+      setState(s => ({
+        ...s,
+        credentialStatus: 'error',
+        errorMessage: error instanceof Error ? error.message : 'Import failed',
+      }))
+    }
+  }, [handleSaveConfig])
+
   // Finish onboarding
   const handleFinish = useCallback(() => {
     onComplete()
@@ -393,8 +432,11 @@ export function useOnboarding({
     isWaitingForCode,
     handleSubmitAuthCode,
     handleCancelOAuth,
+    // Codex
+    handleImportCodexAuth,
     handleFinish,
     handleCancel,
     reset,
   }
 }
+

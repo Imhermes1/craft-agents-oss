@@ -34,7 +34,7 @@ export interface ParsedRoute {
 // Compound Route Types (new format)
 // =============================================================================
 
-export type NavigatorType = 'chats' | 'sources' | 'skills' | 'settings'
+export type NavigatorType = 'chats' | 'chat' | 'sources' | 'skills' | 'settings'
 
 export interface ParsedCompoundRoute {
   /** The navigator type */
@@ -58,7 +58,7 @@ export interface ParsedCompoundRoute {
  * Known prefixes that indicate a compound route
  */
 const COMPOUND_ROUTE_PREFIXES = [
-  'allChats', 'flagged', 'state', 'label', 'view', 'sources', 'skills', 'settings'
+  'allChats', 'flagged', 'state', 'label', 'view', 'chat', 'sources', 'skills', 'settings'
 ]
 
 /**
@@ -90,6 +90,22 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
   if (segments.length === 0) return null
 
   const first = segments[0]
+
+  // Chat mode (singular) - chat/session/:id or chat/chat/:id
+  if (first === 'chat') {
+    const isSessionOrChat = segments[1] === 'session' || segments[1] === 'chat'
+    if (isSessionOrChat && segments[2]) {
+      return {
+        navigator: 'chat',
+        details: { type: 'chat', id: segments[2] },
+      }
+    }
+    // Return chat navigator without selection if invalid session part
+    return {
+      navigator: 'chat',
+      details: null
+    }
+  }
 
   // Settings navigator
   if (first === 'settings') {
@@ -213,6 +229,10 @@ export function parseCompoundRoute(route: string): ParsedCompoundRoute | null {
  * Build a compound route string from parsed state
  */
 export function buildCompoundRoute(parsed: ParsedCompoundRoute): string {
+  if (parsed.navigator === 'chat') {
+    return parsed.details ? `chat/chat/${parsed.details.id}` : 'allChats'
+  }
+
   if (parsed.navigator === 'settings') {
     const detailsType = parsed.details?.type || 'app'
     return detailsType === 'app' ? 'settings' : `settings/${detailsType}`
@@ -429,6 +449,14 @@ export function parseRouteToNavigationState(
  * Convert a ParsedCompoundRoute to NavigationState
  */
 function convertCompoundToNavigationState(compound: ParsedCompoundRoute): NavigationState {
+  // Chat mode (singular)
+  if (compound.navigator === 'chat') {
+    return {
+      navigator: 'chat',
+      details: { type: 'chat', sessionId: compound.details?.id || '' },
+    }
+  }
+
   // Settings
   if (compound.navigator === 'settings') {
     const subpage = (compound.details?.type || 'app') as SettingsSubpage
@@ -541,7 +569,7 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
           filter = { kind: filterKind as 'allChats' | 'flagged' }
         }
         return {
-          navigator: 'chats',
+          navigator: parsed.params.filter ? 'chats' : 'chat',
           filter,
           details: { type: 'chat', sessionId: parsed.id },
         }
@@ -595,6 +623,10 @@ function convertParsedRouteToNavigationState(parsed: ParsedRoute): NavigationSta
  * Build a route string from NavigationState
  */
 export function buildRouteFromNavigationState(state: NavigationState): string {
+  if (state.navigator === 'chat') {
+    return state.details ? `chat/chat/${state.details.sessionId}` : 'chat'
+  }
+
   if (state.navigator === 'settings') {
     return state.subpage === 'app' ? 'settings' : `settings/${state.subpage}`
   }

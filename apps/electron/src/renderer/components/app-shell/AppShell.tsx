@@ -93,11 +93,13 @@ import {
   useNavigation,
   useNavigationState,
   isChatsNavigation,
+  isChatNavigation,
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
   type NavigationState,
   type ChatFilter,
+  type Route,
 } from "@/contexts/NavigationContext"
 import type { SettingsSubpage } from "../../../shared/types"
 import { SourcesListPanel } from "./SourcesListPanel"
@@ -250,8 +252,8 @@ function AppShellContent({
   // All sidebar/navigator/main panel state is derived from this
   const navState = useNavigationState()
 
-  // Derive chat filter from navigation state (only when in chats navigator)
-  const chatFilter = isChatsNavigation(navState) ? navState.filter : null
+  // Derive chat filter from navigation state (only when in chats navigator or standalone chat mode)
+  const chatFilter = isChatsNavigation(navState) ? navState.filter : (isChatNavigation(navState) ? { kind: 'allChats' } as const : null)
 
   // Derive source filter from navigation state (only when in sources navigator)
   const sourceFilter: SourceFilter | null = isSourcesNavigation(navState) ? navState.filter ?? null : null
@@ -278,6 +280,41 @@ function AppShellContent({
     setSearchActive(false)
     setSearchQuery('')
   }, [navFilterKey])
+
+  // Sync appMode state with the active navigation state
+  React.useEffect(() => {
+    if (isChatNavigation(navState)) {
+      setAppMode('chat')
+    } else if (isChatsNavigation(navState)) {
+      setAppMode('agent')
+    }
+  }, [navState])
+
+  // Handle manual appMode toggle from the header
+  const handleModeChange = React.useCallback((newMode: AppMode) => {
+    setAppMode(newMode)
+    storage.set(storage.KEYS.appMode, newMode)
+
+    const currentSessionId = session.selected
+
+    if (newMode === 'chat') {
+      // Switch to standalone Chat Mode UI
+      if (currentSessionId) {
+        // Switch the active session to standalone view
+        navigate(routes.view.chat(currentSessionId))
+      } else {
+        // Default starting point for chat mode
+        navigate(routes.view.allChats())
+      }
+    } else {
+      // Switch back to Agent Mode UI (with list)
+      if (currentSessionId) {
+        navigate(routes.view.allChats(currentSessionId))
+      } else {
+        navigate(routes.view.allChats())
+      }
+    }
+  }, [session.selected, navigate])
 
   // Auto-hide right sidebar when navigating away from chat sessions
   React.useEffect(() => {
@@ -814,7 +851,7 @@ function AppShellContent({
 
   // Right sidebar OPEN button (fades out when sidebar is open, hidden in focused mode or non-chat views)
   const rightSidebarOpenButton = React.useMemo(() => {
-    if (isFocusedMode || !isChatsNavigation(navState) || !navState.details) return null
+    if (isFocusedMode || (!isChatsNavigation(navState) && !isChatNavigation(navState)) || !navState.details) return null
 
     return (
       <motion.div
@@ -1059,13 +1096,29 @@ function AppShellContent({
   }, [captureContextMenuPosition])
 
   // Create a new chat and select it
-  const handleNewChat = useCallback(async (_useCurrentAgent: boolean = true) => {
-    if (!activeWorkspace) return
+  const handleNewChat = useCallback((showSidebar = false, options?: import('../../../shared/types').CreateSessionOptions) => {
+    // If we're in Chat mode, create an OpenRouter session by default
+    const mergedOptions = { ...options }
+    if (appMode === 'chat' && !mergedOptions.runtime) {
+      mergedOptions.runtime = 'openrouter-chat'
+      // Set default OpenRouter model if not specified
+      if (!mergedOptions.model) {
+        mergedOptions.model = 'openai/gpt-oss-120b:free'
+      }
+    }
 
-    const newSession = await onCreateSession(activeWorkspace.id)
-    // Navigate to the new session via central routing
-    navigate(routes.view.allChats(newSession.id))
-  }, [activeWorkspace, onCreateSession])
+    if (activeWorkspaceId) {
+      const url = routes.action.newChat({
+        ...mergedOptions,
+        mode: mergedOptions.permissionMode,
+        workdir: mergedOptions.workingDirectory,
+      })
+      navigate(url)
+    }
+    if (showSidebar) {
+      setIsSidebarVisible(true)
+    }
+  }, [activeWorkspaceId, appMode, navigate])
 
   // Delete Source - simplified since agents system is removed
   const handleDeleteSource = useCallback(async (sourceSlug: string) => {
@@ -1385,7 +1438,7 @@ function AppShellContent({
                 onKeyDown={handleSidebarKeyDown}
               >
                 <div className="flex h-full flex-col pt-[50px] select-none">
-                  <CustomAppShellHeader mode={appMode} onChange={setAppMode} />
+                  <CustomAppShellHeader mode={appMode} onChange={handleModeChange} />
                   {/* Sidebar Top Section */}
                   <div className="flex-1 flex flex-col min-h-0">
                     {/* New Chat Button - Gmail-style, with context menu for "Open in New Window" */}
@@ -1844,7 +1897,7 @@ function AppShellContent({
                     onSelectSubpage={(subpage) => handleSettingsClick(subpage)}
                   />
                 )}
-                {isChatsNavigation(navState) && (
+                {(isChatsNavigation(navState) || isChatNavigation(navState)) && (
                   /* Sessions List */
                   <>
                     {/* SessionList: Scrollable list of session cards */}
@@ -1861,7 +1914,10 @@ function AppShellContent({
                       onFocusChatInput={focusChatInput}
                       onSessionSelect={(selectedMeta) => {
                         // Navigate to the session via central routing (with filter context)
-                        if (!chatFilter || chatFilter.kind === 'allChats') {
+                        // If we are in standalone Chat Mode, stay in Chat Mode
+                        if (isChatNavigation(navState)) {
+                          navigate(routes.view.chat(selectedMeta.id))
+                        } else if (!chatFilter || chatFilter.kind === 'allChats') {
                           navigate(routes.view.allChats(selectedMeta.id))
                         } else if (chatFilter.kind === 'flagged') {
                           navigate(routes.view.flagged(selectedMeta.id))
@@ -1983,7 +2039,7 @@ function AppShellContent({
                   >
                     <RightSidebar
                       panel={{ type: 'sessionMetadata' }}
-                      sessionId={isChatsNavigation(navState) && navState.details ? navState.details.sessionId : undefined}
+                      sessionId={(isChatsNavigation(navState) || isChatNavigation(navState)) && navState.details ? navState.details.sessionId : undefined}
                       closeButton={rightSidebarCloseButton}
                     />
                   </motion.div>
@@ -2016,7 +2072,7 @@ function AppShellContent({
                       <div className="h-full bg-foreground-2 overflow-hidden shadow-strong rounded-[12px]">
                         <RightSidebar
                           panel={{ type: 'sessionMetadata' }}
-                          sessionId={isChatsNavigation(navState) && navState.details ? navState.details.sessionId : undefined}
+                          sessionId={(isChatsNavigation(navState) || isChatNavigation(navState)) && navState.details ? navState.details.sessionId : undefined}
                           closeButton={rightSidebarCloseButton}
                         />
                       </div>

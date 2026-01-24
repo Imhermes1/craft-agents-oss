@@ -22,6 +22,8 @@ export interface SessionMeta {
   /** Preview of first user message (for title fallback) */
   preview?: string
   workspaceId: string
+  /** Session runtime discriminator ('claude' | 'openrouter-chat') */
+  runtime?: 'claude' | 'openrouter-chat'
   lastMessageAt?: number
   isProcessing?: boolean
   isFlagged?: boolean
@@ -95,6 +97,7 @@ export function extractSessionMeta(session: Session): SessionMeta {
     name: session.name,
     preview: session.preview,
     workspaceId: session.workspaceId,
+    runtime: session.runtime,
     lastMessageAt: session.lastMessageAt,
     isProcessing: session.isProcessing,
     isFlagged: session.isFlagged,

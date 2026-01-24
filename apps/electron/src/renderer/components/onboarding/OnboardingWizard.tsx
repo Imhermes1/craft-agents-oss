@@ -44,6 +44,9 @@ interface OnboardingWizardProps {
   onSubmitAuthCode?: (code: string) => void
   onCancelOAuth?: () => void
 
+  // Codex
+  onImportCodexAuth?: () => void
+
   className?: string
 }
 
@@ -71,6 +74,8 @@ export function OnboardingWizard({
   isWaitingForCode,
   onSubmitAuthCode,
   onCancelOAuth,
+  // Codex
+  onImportCodexAuth,
   className
 }: OnboardingWizardProps) {
   const renderStep = () => {
@@ -108,6 +113,7 @@ export function OnboardingWizard({
             isWaitingForCode={isWaitingForCode}
             onSubmitAuthCode={onSubmitAuthCode}
             onCancelOAuth={onCancelOAuth}
+            onImportCodexAuth={onImportCodexAuth}
           />
         )
 
@@ -127,7 +133,7 @@ export function OnboardingWizard({
   return (
     <div
       className={cn(
-        "flex flex-col bg-foreground-2",
+        "flex flex-col bg-white dark:bg-zinc-900",
         !className?.includes('h-full') && "min-h-screen",
         className
       )}

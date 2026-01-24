@@ -1,8 +1,8 @@
 import { cn } from "@/lib/utils"
-import { Check, CreditCard, Key } from "lucide-react"
+import { Check, CreditCard, Key, Globe, Terminal } from "lucide-react"
 import { StepFormLayout, BackButton, ContinueButton } from "./primitives"
 
-export type ApiSetupMethod = 'api_key' | 'claude_oauth'
+export type ApiSetupMethod = 'api_key' | 'claude_oauth' | 'openrouter' | 'codex'
 
 interface ApiSetupOption {
   id: ApiSetupMethod
@@ -21,9 +21,21 @@ const API_SETUP_OPTIONS: ApiSetupOption[] = [
     recommended: true,
   },
   {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    description: 'Access top models like GPT-4, Claude 3, and Llama 3 via OpenRouter.',
+    icon: <Globe className="size-4" />,
+  },
+  {
+    id: 'codex',
+    name: 'OpenAI / Codex',
+    description: 'Use your existing local Codex CLI login.',
+    icon: <Terminal className="size-4" />,
+  },
+  {
     id: 'api_key',
     name: 'API Key',
-    description: 'Anthropic, OpenRouter, Ollama, or compatible APIs.',
+    description: 'Anthropic, Ollama, or compatible APIs.',
     icon: <Key className="size-4" />,
   },
 ]

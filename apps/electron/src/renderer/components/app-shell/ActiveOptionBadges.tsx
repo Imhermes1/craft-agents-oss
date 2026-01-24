@@ -64,6 +64,8 @@ export interface ActiveOptionBadgesProps {
   labels?: LabelConfig[]
   /** Callback when a label is removed */
   onRemoveLabel?: (labelId: string) => void
+  /** Callback to show terminal output overlay */
+  onShowTerminalOverlay?: (data: import('./TaskActionMenu').TerminalOverlayData) => void
   /** Additional CSS classes */
   className?: string
 }
@@ -80,6 +82,7 @@ export function ActiveOptionBadges({
   sessionLabels = [],
   labels = [],
   onRemoveLabel,
+  onShowTerminalOverlay,
   className,
 }: ActiveOptionBadgesProps) {
   // Resolve session label entries to their config objects for rendering.
@@ -134,6 +137,18 @@ export function ActiveOptionBadges({
           </span>
           <X className="h-3 w-3 text-purple-500 opacity-60 hover:opacity-100 translate-y-px" />
         </button>
+      )}
+
+      {/* Background Tasks Bar */}
+      {tasks.length > 0 && sessionId && (
+        <ActiveTasksBar
+          tasks={tasks}
+          sessionId={sessionId}
+          onKillTask={onKillTask}
+          onInsertMessage={onInsertMessage}
+          onShowTerminalOverlay={onShowTerminalOverlay}
+          className="shrink-0"
+        />
       )}
 
       {/* Label Badges Container — dynamic stacking with equal visible strips.

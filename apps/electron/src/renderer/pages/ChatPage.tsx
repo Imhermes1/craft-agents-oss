@@ -25,9 +25,16 @@ import { isClaudeModel } from '@craft-agent/shared/config/models'
 
 export interface ChatPageProps {
   sessionId: string
+  /**
+   * Display variant:
+   * - 'agent': Standard agent interface (Claude only, stock selector)
+   * - 'chat': OpenRouter interface (All models, searchable selector)
+   * @default 'agent'
+   */
+  variant?: 'agent' | 'chat'
 }
 
-const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
+const ChatPage = React.memo(function ChatPage({ sessionId, variant: explicitVariant }: ChatPageProps) {
   // Diagnostic: mark when component runs
   React.useLayoutEffect(() => {
     rendererPerf.markSessionSwitch(sessionId, 'panel.mounted')
@@ -71,7 +78,8 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
 
   // Use per-session atom for isolated updates
   const session = useSessionData(sessionId)
-
+  // Determine effective variant: explicit prop > session runtime > default 'agent'
+  const variant = explicitVariant ?? (session?.runtime === 'openrouter-chat' ? 'chat' : 'agent')
   // Track if messages are loaded for this session (for lazy loading)
   const loadedSessions = useAtomValue(loadedSessionsAtom)
   const messagesLoaded = loadedSessions.has(sessionId)
@@ -104,15 +112,11 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   }, [])
 
   // Track which session user is viewing (for unread state machine).
-  // This tells main process user is looking at this session, so:
-  // 1. If not processing → clear hasUnread immediately
-  // 2. If processing → when it completes, main process will clear hasUnread
-  // The main process handles all the logic; we just report viewing state.
   React.useEffect(() => {
     if (session && isWindowFocused) {
       onSetActiveViewingSession(session.id)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, isWindowFocused, onSetActiveViewingSession])
 
   // Get pending permission and credential for this session
@@ -129,11 +133,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     setInputValue(getDraft(sessionId))
   }, [getDraft, sessionId])
 
-  // Sync when draft is set externally (e.g., from notifications or shortcuts)
-  // PERFORMANCE NOTE: This bounded polling (max 10 attempts × 50ms = 500ms)
-  // handles external draft injection. Drafts use a ref for typing performance,
-  // so they're not directly reactive. This polling only runs on session switch,
-  // not continuously. Alternative: Add a Jotai atom for draft changes.
+  // Sync when draft is set externally
   React.useEffect(() => {
     let attempts = 0
     const maxAttempts = 10
@@ -158,16 +158,19 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     onInputChange(sessionId, value)
   }, [sessionId, onInputChange])
 
-  // Session model change handler - persists per-session model
+  // Session model change handler
   const handleModelChange = React.useCallback((model: string) => {
     if (activeWorkspaceId) {
       window.electronAPI.setSessionModel(sessionId, activeWorkspaceId, model)
     }
   }, [sessionId, activeWorkspaceId])
 
-  // Effective model for this session (session-specific or global fallback)
-  // In Agent mode, only use Claude models - fall back if session has OpenRouter model
-  const effectiveModel = (session?.model && isClaudeModel(session.model)) ? session.model : currentModel
+  // Effective model for this session
+  // Agent mode: Prefer session model if it's Claude, else fallback to global currentModel
+  // Chat mode: Trust session model completely (supports all OpenRouter models), or fallback to global
+  const effectiveModel = variant === 'chat'
+    ? (session?.model || currentModel)
+    : (session?.model && isClaudeModel(session.model) ? session.model : currentModel)
 
   // Working directory for this session
   const workingDirectory = session?.workingDirectory
@@ -209,8 +212,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     }
   }, [sessionId, session])
 
-  // Get display title for header - use getSessionTitle for consistent fallback logic with SessionList
-  // Priority: name > first user message > preview > "New chat"
+  // Get display title
   const displayTitle = session ? getSessionTitle(session) : (sessionMeta ? getSessionTitle(sessionMeta) : 'Chat')
   const isFlagged = session?.isFlagged || sessionMeta?.isFlagged || false
   const sharedUrl = session?.sharedUrl || sessionMeta?.sharedUrl || null
@@ -219,7 +221,6 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   const hasUnreadMessages = sessionMeta
     ? !!(sessionMeta.lastFinalMessageId && sessionMeta.lastFinalMessageId !== sessionMeta.lastReadMessageId)
     : false
-  // Use isAsyncOperationOngoing for shimmer effect (sharing, updating share, revoking, title regeneration)
   const isAsyncOperationOngoing = session?.isAsyncOperationOngoing || sessionMeta?.isAsyncOperationOngoing || false
 
   // Rename dialog state
@@ -320,11 +321,11 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
         <HeaderIconButton
           icon={sharedUrl
             ? <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M11.2383 10.2871C11.6481 10.0391 12.1486 10.0082 12.5811 10.1943L12.7617 10.2871L13.0088 10.4414C14.2231 11.227 15.1393 12.2124 15.8701 13.502C16.1424 13.9824 15.9736 14.5929 15.4932 14.8652C15.0127 15.1375 14.4022 14.9688 14.1299 14.4883C13.8006 13.9073 13.4303 13.417 13 12.9883V21C13 21.5523 12.5523 22 12 22C11.4477 22 11 21.5523 11 21V12.9883C10.5697 13.417 10.1994 13.9073 9.87012 14.4883C9.59781 14.9688 8.98732 15.1375 8.50684 14.8652C8.02643 14.5929 7.8576 13.9824 8.12988 13.502C8.90947 12.1264 9.90002 11.0972 11.2383 10.2871ZM11.5 3C14.2848 3 16.6594 4.75164 17.585 7.21289C20.1294 7.90815 22 10.235 22 13C22 16.3137 19.3137 19 16 19H15V16.9961C15.5021 16.9966 16.0115 16.8707 16.4795 16.6055C17.9209 15.7885 18.4272 13.9571 17.6104 12.5156C16.6661 10.8495 15.4355 9.56805 13.7969 8.57617C12.692 7.90745 11.308 7.90743 10.2031 8.57617C8.56453 9.56806 7.3339 10.8495 6.38965 12.5156C5.57277 13.957 6.07915 15.7885 7.52051 16.6055C7.98851 16.8707 8.49794 16.9966 9 16.9961V19H7C4.23858 19 2 16.7614 2 14C2 11.9489 3.23498 10.1861 5.00195 9.41504C5.04745 5.86435 7.93852 3 11.5 3Z" />
-              </svg>
+              <path d="M11.2383 10.2871C11.6481 10.0391 12.1486 10.0082 12.5811 10.1943L12.7617 10.2871L13.0088 10.4414C14.2231 11.227 15.1393 12.2124 15.8701 13.502C16.1424 13.9824 15.9736 14.5929 15.4932 14.8652C15.0127 15.1375 14.4022 14.9688 14.1299 14.4883C13.8006 13.9073 13.4303 13.417 13 12.9883V21C13 21.5523 12.5523 22 12 22C11.4477 22 11 21.5523 11 21V12.9883C10.5697 13.417 10.1994 13.9073 9.87012 14.4883C9.59781 14.9688 8.98732 15.1375 8.50684 14.8652C8.02643 14.5929 7.8576 13.9824 8.12988 13.502C8.90947 12.1264 9.90002 11.0972 11.2383 10.2871ZM11.5 3C14.2848 3 16.6594 4.75164 17.585 7.21289C20.1294 7.90815 22 10.235 22 13C22 16.3137 19.3137 19 16 19H15V16.9961C15.5021 16.9966 16.0115 16.8707 16.4795 16.6055C17.9209 15.7885 18.4272 13.9571 17.6104 12.5156C16.6661 10.8495 15.4355 9.56805 13.7969 8.57617C12.692 7.90745 11.308 7.90743 10.2031 8.57617C8.56453 9.56806 7.3339 10.8495 6.38965 12.5156C5.57277 13.957 6.07915 15.7885 7.52051 16.6055C7.98851 16.8707 8.49794 16.9966 9 16.9961V19H7C4.23858 19 2 16.7614 2 14C2 11.9489 3.23498 10.1861 5.00195 9.41504C5.04745 5.86435 7.93852 3 11.5 3Z" />
+            </svg>
             : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <path d="M8 8.53809C6.74209 8.60866 5.94798 8.80911 5.37868 9.37841C4.5 10.2571 4.5 11.6713 4.5 14.4997V15.4997C4.5 18.3282 4.5 19.7424 5.37868 20.6211C6.25736 21.4997 7.67157 21.4997 10.5 21.4997H13.5C16.3284 21.4997 17.7426 21.4997 18.6213 20.6211C19.5 19.7424 19.5 18.3282 19.5 15.4997V14.4997C19.5 11.6713 19.5 10.2571 18.6213 9.37841C18.052 8.80911 17.2579 8.60866 16 8.53809M12 14V3.5M9.5 5.5C9.99903 4.50411 10.6483 3.78875 11.5606 3.24093C11.7612 3.12053 11.8614 3.06033 12 3.06033C12.1386 3.06033 12.2388 3.12053 12.4394 3.24093C13.3517 3.78875 14.001 4.50411 14.5 5.5" />
-              </svg>
+              <path d="M8 8.53809C6.74209 8.60866 5.94798 8.80911 5.37868 9.37841C4.5 10.2571 4.5 11.6713 4.5 14.4997V15.4997C4.5 18.3282 4.5 19.7424 5.37868 20.6211C6.25736 21.4997 7.67157 21.4997 10.5 21.4997H13.5C16.3284 21.4997 17.7426 21.4997 18.6213 20.6211C19.5 19.7424 19.5 18.3282 19.5 15.4997V14.4997C19.5 11.6713 19.5 10.2571 18.6213 9.37841C18.052 8.80911 17.2579 8.60866 16 8.53809M12 14V3.5M9.5 5.5C9.99903 4.50411 10.6483 3.78875 11.5606 3.24093C11.7612 3.12053 11.8614 3.06033 12 3.06033C12.1386 3.06033 12.2388 3.12053 12.4394 3.24093C13.3517 3.78875 14.001 4.50411 14.5 5.5" />
+            </svg>
           }
           className={sharedUrl ? 'text-accent' : 'text-foreground'}
         />
@@ -432,11 +433,11 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
       return (
         <>
           <div className="h-full flex flex-col">
-            <PanelHeader  title={displayTitle} titleMenu={titleMenu} actions={shareButton} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
+            <PanelHeader title={displayTitle} titleMenu={titleMenu} actions={shareButton} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
             <div className="flex-1 flex flex-col min-h-0">
               <ChatDisplay
                 session={skeletonSession}
-                onSendMessage={() => {}}
+                onSendMessage={() => { }}
                 onOpenFile={handleOpenFile}
                 onOpenUrl={handleOpenUrl}
                 currentModel={effectiveModel}
@@ -481,7 +482,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
     // Session truly doesn't exist
     return (
       <div className="h-full flex flex-col">
-        <PanelHeader  title="Chat" rightSidebarButton={rightSidebarButton} />
+        <PanelHeader title="Chat" rightSidebarButton={rightSidebarButton} />
         <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground">
           <AlertCircle className="h-10 w-10" />
           <p className="text-sm">This session no longer exists</p>
@@ -493,7 +494,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
   return (
     <>
       <div className="h-full flex flex-col">
-        <PanelHeader  title={displayTitle} titleMenu={titleMenu} actions={shareButton} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
+        <PanelHeader title={displayTitle} titleMenu={titleMenu} actions={shareButton} rightSidebarButton={rightSidebarButton} isRegeneratingTitle={isAsyncOperationOngoing} />
         <div className="flex-1 flex flex-col min-h-0">
           <ChatDisplay
             session={session}
@@ -530,6 +531,7 @@ const ChatPage = React.memo(function ChatPage({ sessionId }: ChatPageProps) {
             onWorkingDirectoryChange={handleWorkingDirectoryChange}
             sessionFolderPath={session?.sessionFolderPath}
             messagesLoading={!messagesLoaded}
+            showChatModeModelSelector={variant === 'chat'}
           />
         </div>
       </div>

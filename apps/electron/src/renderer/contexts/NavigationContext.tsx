@@ -247,14 +247,17 @@ export function NavigationProvider({
 
           // Update navigation state based on runtime
           setSession({ selected: session.id })
-          if (createOptions.runtime === 'openrouter-chat') {
-            // Navigate to chat navigator for OpenRouter sessions
+
+          // Navigate to the appropriate navigator based on session runtime
+          // OpenRouter chat sessions use 'chat' navigator (Chat Mode)
+          // Claude sessions use 'chats' navigator (Agent Mode)
+          const isOpenRouterChat = session.runtime === 'openrouter-chat'
+          if (isOpenRouterChat) {
             setNavigationState({
               navigator: 'chat',
               details: { type: 'chat', sessionId: session.id },
             })
           } else {
-            // Navigate to chats navigator for agent sessions
             setNavigationState({
               navigator: 'chats',
               filter: { kind: 'allChats' },
@@ -423,6 +426,11 @@ export function NavigationProvider({
         setSession({ selected: newState.details.sessionId })
       }
 
+      // For standalone chat mode: update session selection
+      if (isChatNavigation(newState) && newState.details) {
+        setSession({ selected: newState.details.sessionId })
+      }
+
       // Apply state directly
       setNavigationState(newState)
       return newState
@@ -518,6 +526,10 @@ export function NavigationProvider({
     if (!navState) return true // Non-navigation routes are always valid
 
     if (isChatsNavigation(navState) && navState.details) {
+      return sessionMetaMap.has(navState.details.sessionId)
+    }
+
+    if (isChatNavigation(navState) && navState.details) {
       return sessionMetaMap.has(navState.details.sessionId)
     }
 

@@ -105,12 +105,24 @@ export function SessionListItem({
                         )}
                     >
                         <div className="flex items-center justify-between gap-2">
-                            <span className={cn(
-                                'truncate text-sm font-medium transition-colors',
-                                isSelected ? 'text-accent' : 'text-foreground/90'
-                            )}>
-                                {session.name || session.preview || 'New Chat'}
-                            </span>
+                            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                <span className={cn(
+                                    'truncate text-sm font-medium transition-colors',
+                                    isSelected ? 'text-accent' : 'text-foreground/90'
+                                )}>
+                                    {session.name || session.preview || 'New Chat'}
+                                </span>
+                                {session.runtime === 'openrouter-chat' && (
+                                    <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-medium bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                                        Chat
+                                    </span>
+                                )}
+                                {(!session.runtime || session.runtime === 'claude') && (
+                                    <span className="shrink-0 rounded px-1 py-0.5 text-[9px] font-medium bg-purple-500/10 text-purple-600 dark:text-purple-400">
+                                        Agent
+                                    </span>
+                                )}
+                            </div>
                             <span className="shrink-0 text-[10px] text-muted-foreground/60">
                                 {session.lastMessageAt && formatDistanceToNow(new Date(session.lastMessageAt), { addSuffix: true })}
                             </span>

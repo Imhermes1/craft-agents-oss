@@ -33,7 +33,10 @@ interface CredentialsStepProps {
   isWaitingForCode?: boolean
   onSubmitAuthCode?: (code: string) => void
   onCancelOAuth?: () => void
+  onImportCodexAuth?: () => void
 }
+
+import { CodexConnect } from "../apisetup/CodexConnect"
 
 export function CredentialsStep({
   apiSetupMethod,
@@ -47,6 +50,7 @@ export function CredentialsStep({
   isWaitingForCode,
   onSubmitAuthCode,
   onCancelOAuth,
+  onImportCodexAuth,
 }: CredentialsStepProps) {
   const isOAuth = apiSetupMethod === 'claude_oauth'
 
@@ -138,11 +142,42 @@ export function CredentialsStep({
     )
   }
 
-  // --- API Key flow ---
+  // --- Codex Flow ---
+  if (apiSetupMethod === 'codex') {
+    return (
+      <StepFormLayout
+        title="Connect OpenAI / Codex"
+        description="Authenticate using the Codex CLI."
+        actions={
+          <>
+            <BackButton onClick={onBack} disabled={status === 'validating'} />
+            <ContinueButton
+              onClick={onImportCodexAuth}
+              loading={status === 'validating'}
+              loadingText="Importing..."
+            >
+              Import Credentials
+            </ContinueButton>
+          </>
+        }
+      >
+        <CodexConnect
+          status={status as any}
+          errorMessage={errorMessage}
+        />
+      </StepFormLayout>
+    )
+  }
+
+  // --- API Key flow (Anthropic, OpenRouter, etc) ---
+  const isOpenRouter = apiSetupMethod === 'openrouter'
+
   return (
     <StepFormLayout
-      title="API Configuration"
-      description="Enter your API key. Optionally configure a custom endpoint for OpenRouter, Ollama, or compatible APIs."
+      title={isOpenRouter ? "OpenRouter Configuration" : "API Configuration"}
+      description={isOpenRouter
+        ? "Enter your OpenRouter API key to access models like GPT-4 and Llama 3."
+        : "Enter your API key. Optionally configure a custom endpoint for Ollama or compatible APIs."}
       actions={
         <>
           <BackButton onClick={onBack} disabled={status === 'validating'} />
@@ -160,6 +195,7 @@ export function CredentialsStep({
         status={status as ApiKeyStatus}
         errorMessage={errorMessage}
         onSubmit={onSubmit}
+        initialPreset={isOpenRouter ? 'openrouter' : 'anthropic'}
       />
     </StepFormLayout>
   )

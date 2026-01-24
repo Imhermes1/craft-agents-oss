@@ -41,6 +41,8 @@ export interface ApiKeyInputProps {
   formId?: string
   /** Disable the input (e.g. during validation) */
   disabled?: boolean
+  /** Initial preset to select */
+  initialPreset?: PresetKey
 }
 
 type PresetKey = 'anthropic' | 'openrouter' | 'vercel' | 'ollama' | 'custom'
@@ -70,11 +72,15 @@ export function ApiKeyInput({
   onSubmit,
   formId = "api-key-form",
   disabled,
+  initialPreset = 'anthropic',
 }: ApiKeyInputProps) {
   const [apiKey, setApiKey] = useState('')
   const [showValue, setShowValue] = useState(false)
-  const [baseUrl, setBaseUrl] = useState(PRESETS[0].url)
-  const [activePreset, setActivePreset] = useState<PresetKey>('anthropic')
+
+  // Initialize base URL based on initial preset
+  const initialBaseUrl = PRESETS.find(p => p.key === initialPreset)?.url ?? PRESETS[0].url
+  const [baseUrl, setBaseUrl] = useState(initialBaseUrl)
+  const [activePreset, setActivePreset] = useState<PresetKey>(initialPreset)
   const [customModel, setCustomModel] = useState('')
 
   const isDisabled = disabled || status === 'validating'

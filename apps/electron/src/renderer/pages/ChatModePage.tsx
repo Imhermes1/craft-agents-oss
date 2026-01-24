@@ -1,12 +1,5 @@
-/**
- * ChatModePage
- *
- * Displays a single OpenRouter chat session.
- * This is different from ChatPage (Agent mode) - it's a simpler LLM chat interface.
- */
-
 import * as React from 'react'
-import OpenRouterChatPage from './OpenRouterChatPage'
+import ChatPage from './ChatPage'
 
 export interface ChatModePageProps {
   sessionId: string
@@ -15,11 +8,10 @@ export interface ChatModePageProps {
 /**
  * ChatModePage component
  *
- * Uses OpenRouterChatPage for the chat interface, which is designed for
- * simple LLM conversations without agentic capabilities.
+ * Uses unified ChatPage with variant="chat" for OpenRouter interface.
  */
 export function ChatModePage({ sessionId }: ChatModePageProps) {
-  return <OpenRouterChatPage sessionId={sessionId} />
+  return <ChatPage sessionId={sessionId} variant="chat" />
 }
 
 export default ChatModePage

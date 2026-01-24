@@ -20,6 +20,7 @@ import { StoplightProvider } from '@/context/StoplightContext'
 import {
   useNavigationState,
   isChatsNavigation,
+  isChatNavigation,
   isSourcesNavigation,
   isSettingsNavigation,
   isSkillsNavigation,
@@ -154,6 +155,15 @@ export function MainContentPanel({
               : 'No conversations yet'}
           </p>
         </div>
+      </Panel>
+    )
+  }
+
+  // Chat mode (OpenRouter) - standalone chat page using the Unified ChatPage
+  if (isChatNavigation(navState)) {
+    return wrapWithStoplight(
+      <Panel variant="grow" className={className}>
+        <ChatPage sessionId={navState.details.sessionId} variant="chat" />
       </Panel>
     )
   }

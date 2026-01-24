@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { rm, readFile } from 'fs/promises'
 import { CraftAgent, type AgentEvent, setPermissionMode, type PermissionMode, unregisterSessionScopedToolCallbacks, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest } from '@craft-agent/shared/agent'
+import { OpenRouterRuntime } from '@craft-agent/shared/agent/openrouter-runtime'
 import { sessionLog, isDebugMode, getLogFilePath } from './logger'
 import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import type { WindowManager } from './window-manager'
@@ -246,7 +247,8 @@ function resolveToolDisplayMeta(
 interface ManagedSession {
   id: string
   workspace: Workspace
-  agent: CraftAgent | null  // Lazy-loaded - null until first message
+  runtime?: 'claude' | 'openrouter-chat'  // Session runtime discriminator
+  agent: CraftAgent | OpenRouterRuntime | null  // Lazy-loaded - null until first message
   messages: Message[]
   isProcessing: boolean
   lastMessageAt: number
@@ -828,6 +830,7 @@ export class SessionManager {
           const managed: ManagedSession = {
             id: meta.id,
             workspace,
+            runtime: meta.runtime,  // Session runtime discriminator
             agent: null,  // Lazy-load agent when needed
             messages: [],  // Lazy-load messages when needed
             isProcessing: false,
@@ -887,6 +890,7 @@ export class SessionManager {
       const storedSession: StoredSession = {
         id: managed.id,
         workspaceRootPath,
+        runtime: managed.runtime,  // Session runtime discriminator
         name: managed.name,
         createdAt: managed.lastMessageAt,  // Approximate, will be overwritten if already exists
         lastUsedAt: Date.now(),
@@ -1208,6 +1212,7 @@ export class SessionManager {
         id: m.id,
         workspaceId: m.workspace.id,
         workspaceName: m.workspace.name,
+        runtime: m.runtime,
         name: m.name,
         preview: m.preview,
         lastMessageAt: m.lastMessageAt,
@@ -1250,6 +1255,7 @@ export class SessionManager {
       id: m.id,
       workspaceId: m.workspace.id,
       workspaceName: m.workspace.name,
+      runtime: m.runtime,
       name: m.name,
       preview: m.preview,  // Include preview for title fallback consistency with getSessions()
       lastMessageAt: m.lastMessageAt,
@@ -1368,11 +1374,14 @@ export class SessionManager {
     const storedSession = createStoredSession(workspaceRootPath, {
       permissionMode: defaultPermissionMode,
       workingDirectory: resolvedWorkingDir,
+      runtime: options?.runtime,  // Pass through runtime from options
+      model: options?.model,  // Pass through model from options
     })
 
     const managed: ManagedSession = {
       id: storedSession.id,
       workspace,
+      runtime: options?.runtime,  // Session runtime discriminator
       agent: null,  // Lazy-load agent on first message
       messages: [],
       isProcessing: false,
@@ -1400,6 +1409,7 @@ export class SessionManager {
       id: storedSession.id,
       workspaceId: workspace.id,
       workspaceName: workspace.name,
+      runtime: options?.runtime,
       lastMessageAt: managed.lastMessageAt,
       messages: [],
       isProcessing: false,
@@ -1416,10 +1426,26 @@ export class SessionManager {
   /**
    * Get or create agent for a session (lazy loading)
    */
-  private async getOrCreateAgent(managed: ManagedSession): Promise<CraftAgent> {
+  private async getOrCreateAgent(managed: ManagedSession): Promise<CraftAgent | OpenRouterRuntime> {
     if (!managed.agent) {
       const end = perf.start('agent.create', { sessionId: managed.id })
       const config = loadStoredConfig()
+
+      // Check runtime and create appropriate agent
+      if (managed.runtime === 'openrouter-chat') {
+        // Create OpenRouter runtime for chat mode
+        const chatModel = managed.model || 'anthropic/claude-3.5-sonnet'
+        sessionLog.info(`Creating OpenRouter runtime for session ${managed.id} with model ${chatModel}`)
+        managed.agent = new OpenRouterRuntime({
+          workspace: managed.workspace,
+          model: chatModel,
+          thinkingLevel: managed.thinkingLevel || 'think',
+        })
+        end()
+        return managed.agent
+      }
+
+      // Default: Create Claude SDK agent
       managed.agent = new CraftAgent({
         workspace: managed.workspace,
         // Session model takes priority, fallback to global config, then resolve with customModel override

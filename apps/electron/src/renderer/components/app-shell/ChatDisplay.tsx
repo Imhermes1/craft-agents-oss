@@ -874,6 +874,23 @@ export function ChatDisplay({
                   const newLabels = (session.labels || []).filter(id => id !== labelId)
                   onLabelsChange?.(newLabels)
                 }}
+                onShowTerminalOverlay={(terminalData) => {
+                  setOverlayState({
+                    type: 'activity',
+                    activity: {
+                      id: 'background-task-preview',
+                      type: 'tool',
+                      status: 'completed',
+                      timestamp: Date.now(),
+                      toolName: terminalData.toolType,
+                      toolInput: {
+                        command: terminalData.command,
+                        description: terminalData.description
+                      },
+                      content: terminalData.output,
+                    } as ActivityItem
+                  })
+                }}
               />
               <InputContainer
                 hideModelSelector={hideModelSelector}

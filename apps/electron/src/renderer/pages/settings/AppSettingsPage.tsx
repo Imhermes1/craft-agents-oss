@@ -159,172 +159,173 @@ export default function AppSettingsPage() {
       <div className="flex-1 min-h-0 mask-fade-y">
         <ScrollArea className="h-full">
           <div className="px-5 py-7 max-w-3xl mx-auto">
-          <div className="space-y-8">
-            {/* Appearance */}
-            <SettingsSection title="Appearance">
-              <SettingsCard>
-                <SettingsRow label="Mode">
-                  <SettingsSegmentedControl
-                    value={mode}
-                    onValueChange={setMode}
-                    options={[
-                      { value: 'system', label: 'System', icon: <Monitor className="w-4 h-4" /> },
-                      { value: 'light', label: 'Light', icon: <Sun className="w-4 h-4" /> },
-                      { value: 'dark', label: 'Dark', icon: <Moon className="w-4 h-4" /> },
-                    ]}
-                  />
-                </SettingsRow>
-                <SettingsRow label="Color theme">
-                  <SettingsMenuSelect
-                    value={colorTheme}
-                    onValueChange={setColorTheme}
-                    options={[
-                      { value: 'default', label: 'Default' },
-                      ...presetThemes
-                        .filter(t => t.id !== 'default')
-                        .map(t => ({
-                          value: t.id,
-                          label: t.theme.name || t.id,
-                        })),
-                    ]}
-                  />
-                </SettingsRow>
-                <SettingsRow label="Font">
-                  <SettingsSegmentedControl
-                    value={font}
-                    onValueChange={setFont}
-                    options={[
-                      { value: 'inter', label: 'Inter' },
-                      { value: 'system', label: 'System' },
-                    ]}
-                  />
-                </SettingsRow>
-              </SettingsCard>
-            </SettingsSection>
+            <div className="space-y-8">
+              {/* Appearance */}
+              <SettingsSection title="Appearance">
+                <SettingsCard>
+                  <SettingsRow label="Mode">
+                    <SettingsSegmentedControl
+                      value={mode}
+                      onValueChange={setMode}
+                      options={[
+                        { value: 'system', label: 'System', icon: <Monitor className="w-4 h-4" /> },
+                        { value: 'light', label: 'Light', icon: <Sun className="w-4 h-4" /> },
+                        { value: 'dark', label: 'Dark', icon: <Moon className="w-4 h-4" /> },
+                      ]}
+                    />
+                  </SettingsRow>
+                  <SettingsRow label="Color theme">
+                    <SettingsMenuSelect
+                      value={colorTheme}
+                      onValueChange={setColorTheme}
+                      options={[
+                        { value: 'default', label: 'Default' },
+                        ...presetThemes
+                          .filter(t => t.id !== 'default')
+                          .map(t => ({
+                            value: t.id,
+                            label: t.theme.name || t.id,
+                          })),
+                      ]}
+                    />
+                  </SettingsRow>
+                  <SettingsRow label="Font">
+                    <SettingsSegmentedControl
+                      value={font}
+                      onValueChange={setFont}
+                      options={[
+                        { value: 'inter', label: 'Inter' },
+                        { value: 'system', label: 'System' },
+                      ]}
+                    />
+                  </SettingsRow>
+                </SettingsCard>
+              </SettingsSection>
 
-            {/* Notifications */}
-            <SettingsSection title="Notifications">
-              <SettingsCard>
-                <SettingsToggle
-                  label="Desktop notifications"
-                  description="Get notified when AI finishes working in a chat."
-                  checked={notificationsEnabled}
-                  onCheckedChange={handleNotificationsEnabledChange}
-                />
-              </SettingsCard>
-            </SettingsSection>
+              {/* Notifications */}
+              <SettingsSection title="Notifications">
+                <SettingsCard>
+                  <SettingsToggle
+                    label="Desktop notifications"
+                    description="Get notified when AI finishes working in a chat."
+                    checked={notificationsEnabled}
+                    onCheckedChange={handleNotificationsEnabledChange}
+                  />
+                </SettingsCard>
+              </SettingsSection>
 
-            {/* API Connection */}
-            <SettingsSection title="API Connection" description="How your AI agents connect to language models.">
-              <SettingsCard>
-                <SettingsRow
-                  label="Connection type"
-                  description={
-                    authType === 'oauth_token' && hasCredential
-                      ? 'Claude Pro/Max — using your Claude subscription'
-                      : authType === 'api_key' && hasCredential
-                        ? 'API Key — Anthropic, OpenRouter, or compatible API'
-                        : 'Not configured'
-                  }
-                >
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={openApiSetup}
+              {/* API Connection */}
+              <SettingsSection title="API Connection" description="How your AI agents connect to language models.">
+                <SettingsCard>
+                  <SettingsRow
+                    label="Connection type"
+                    description={
+                      authType === 'oauth_token' && hasCredential
+                        ? 'Claude Pro/Max — using your Claude subscription'
+                        : authType === 'api_key' && hasCredential
+                          ? 'API Key — Anthropic, OpenRouter, or compatible API'
+                          : 'Not configured'
+                    }
                   >
-                    Edit
-                  </Button>
-                </SettingsRow>
-              </SettingsCard>
-            </SettingsSection>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={openApiSetup}
+                    >
+                      Edit
+                    </Button>
+                  </SettingsRow>
+                </SettingsCard>
+              </SettingsSection>
 
-            {/* API Setup Fullscreen Overlay — reuses the OnboardingWizard starting at the api-setup step */}
-            <FullscreenOverlayBase
-              isOpen={showApiSetup}
-              onClose={closeApiSetup}
-              className="z-splash flex flex-col bg-foreground-2"
-            >
-              <OnboardingWizard
-                state={apiSetupOnboarding.state}
-                onContinue={apiSetupOnboarding.handleContinue}
-                onBack={apiSetupOnboarding.handleBack}
-                onSelectApiSetupMethod={apiSetupOnboarding.handleSelectApiSetupMethod}
-                onSubmitCredential={apiSetupOnboarding.handleSubmitCredential}
-                onStartOAuth={apiSetupOnboarding.handleStartOAuth}
-                onFinish={handleApiSetupFinish}
-                existingClaudeToken={apiSetupOnboarding.existingClaudeToken}
-                isClaudeCliInstalled={apiSetupOnboarding.isClaudeCliInstalled}
-                onUseExistingClaudeToken={apiSetupOnboarding.handleUseExistingClaudeToken}
-                isWaitingForCode={apiSetupOnboarding.isWaitingForCode}
-                onSubmitAuthCode={apiSetupOnboarding.handleSubmitAuthCode}
-                onCancelOAuth={apiSetupOnboarding.handleCancelOAuth}
-                className="h-full"
-              />
-              {/* Close button — rendered AFTER the wizard so it paints above its titlebar-drag-region */}
-              <div
-                className="fixed top-0 right-0 h-[50px] flex items-center pr-5 [-webkit-app-region:no-drag]"
-                style={{ zIndex: 'var(--z-fullscreen, 350)' }}
+              {/* API Setup Fullscreen Overlay — reuses the OnboardingWizard starting at the api-setup step */}
+              <FullscreenOverlayBase
+                isOpen={showApiSetup}
+                onClose={closeApiSetup}
+                className="z-splash flex flex-col bg-white dark:bg-zinc-900"
               >
-                <button
-                  onClick={closeApiSetup}
-                  className="p-1.5 rounded-[6px] transition-all bg-background shadow-minimal text-muted-foreground/50 hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  title="Close (Esc)"
+                <OnboardingWizard
+                  state={apiSetupOnboarding.state}
+                  onContinue={apiSetupOnboarding.handleContinue}
+                  onBack={apiSetupOnboarding.handleBack}
+                  onSelectApiSetupMethod={apiSetupOnboarding.handleSelectApiSetupMethod}
+                  onSubmitCredential={apiSetupOnboarding.handleSubmitCredential}
+                  onStartOAuth={apiSetupOnboarding.handleStartOAuth}
+                  onFinish={handleApiSetupFinish}
+                  existingClaudeToken={apiSetupOnboarding.existingClaudeToken}
+                  isClaudeCliInstalled={apiSetupOnboarding.isClaudeCliInstalled}
+                  onUseExistingClaudeToken={apiSetupOnboarding.handleUseExistingClaudeToken}
+                  isWaitingForCode={apiSetupOnboarding.isWaitingForCode}
+                  onSubmitAuthCode={apiSetupOnboarding.handleSubmitAuthCode}
+                  onCancelOAuth={apiSetupOnboarding.handleCancelOAuth}
+                  onImportCodexAuth={apiSetupOnboarding.handleImportCodexAuth}
+                  className="h-full"
+                />
+                {/* Close button — rendered AFTER the wizard so it paints above its titlebar-drag-region */}
+                <div
+                  className="fixed top-0 right-0 h-[50px] flex items-center pr-5 [-webkit-app-region:no-drag]"
+                  style={{ zIndex: 'var(--z-fullscreen, 350)' }}
                 >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </FullscreenOverlayBase>
+                  <button
+                    onClick={closeApiSetup}
+                    className="p-1.5 rounded-[6px] transition-all bg-background shadow-minimal text-muted-foreground/50 hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    title="Close (Esc)"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </FullscreenOverlayBase>
 
-            {/* About */}
-            <SettingsSection title="About">
-              <SettingsCard>
-                <SettingsRow label="Version">
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground">
-                      {updateChecker.updateInfo?.currentVersion ?? 'Loading...'}
-                    </span>
-                    {updateChecker.updateAvailable && updateChecker.updateInfo?.latestVersion && (
+              {/* About */}
+              <SettingsSection title="About">
+                <SettingsCard>
+                  <SettingsRow label="Version">
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">
+                        {updateChecker.updateInfo?.currentVersion ?? 'Loading...'}
+                      </span>
+                      {updateChecker.updateAvailable && updateChecker.updateInfo?.latestVersion && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={updateChecker.installUpdate}
+                        >
+                          Update to {updateChecker.updateInfo.latestVersion}
+                        </Button>
+                      )}
+                    </div>
+                  </SettingsRow>
+                  <SettingsRow label="Check for updates">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCheckForUpdates}
+                      disabled={isCheckingForUpdates}
+                    >
+                      {isCheckingForUpdates ? (
+                        <>
+                          <Spinner className="mr-1.5" />
+                          Checking...
+                        </>
+                      ) : (
+                        'Check Now'
+                      )}
+                    </Button>
+                  </SettingsRow>
+                  {updateChecker.isReadyToInstall && (
+                    <SettingsRow label="Install update">
                       <Button
-                        variant="outline"
                         size="sm"
                         onClick={updateChecker.installUpdate}
                       >
-                        Update to {updateChecker.updateInfo.latestVersion}
+                        Restart to Update
                       </Button>
-                    )}
-                  </div>
-                </SettingsRow>
-                <SettingsRow label="Check for updates">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCheckForUpdates}
-                    disabled={isCheckingForUpdates}
-                  >
-                    {isCheckingForUpdates ? (
-                      <>
-                        <Spinner className="mr-1.5" />
-                        Checking...
-                      </>
-                    ) : (
-                      'Check Now'
-                    )}
-                  </Button>
-                </SettingsRow>
-                {updateChecker.isReadyToInstall && (
-                  <SettingsRow label="Install update">
-                    <Button
-                      size="sm"
-                      onClick={updateChecker.installUpdate}
-                    >
-                      Restart to Update
-                    </Button>
-                  </SettingsRow>
-                )}
-              </SettingsCard>
-            </SettingsSection>
+                    </SettingsRow>
+                  )}
+                </SettingsCard>
+              </SettingsSection>
+            </div>
           </div>
-        </div>
         </ScrollArea>
       </div>
     </div>

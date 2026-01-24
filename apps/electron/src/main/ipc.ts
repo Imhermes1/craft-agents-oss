@@ -2223,7 +2223,20 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
   })
 
   // Register onboarding handlers
-  registerOnboardingHandlers(sessionManager)
+  try {
+    ipcLog.info('Registering onboarding handlers...')
+    registerOnboardingHandlers(sessionManager)
+    ipcLog.info('Onboarding handlers registered')
+  } catch (error) {
+    const errorDetails = error instanceof Error
+      ? error.stack
+      : typeof error === 'object'
+        ? JSON.stringify(error, Object.getOwnPropertyNames(error))
+        : String(error)
+    ipcLog.error('Failed to register onboarding handlers:', errorDetails)
+    // Re-throw to ensure we know something went wrong, but maybe we should let other handlers register?
+    // Actually, let's allow other handlers to register so at least window controls work
+  }
 
   // ============================================================
   // Theme (app-level only)

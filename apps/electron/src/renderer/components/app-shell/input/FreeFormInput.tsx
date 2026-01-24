@@ -1188,427 +1188,418 @@ export function FreeFormInput({
           <EscapeInterruptOverlay isVisible={isProcessing && showEscapeOverlay} />
 
           <div className="flex items-center gap-1 px-2 py-2 border-t border-border/50">
-          {/* Context Badges - Files, Sources, Folder */}
-          {/* 1. Attach Files Badge */}
-          <FreeFormInputContextBadge
-            icon={<Paperclip className="h-4 w-4" />}
-            // Show count ("1 file" / "X files") instead of filename for cleaner UI
-            label={attachments.length > 0
-              ? attachments.length === 1
-                ? "1 file"
-                : `${attachments.length} files`
-              : "Attach Files"
-            }
-            isExpanded={isEmptySession}
-            hasSelection={attachments.length > 0}
-            showChevron={false}
-            onClick={handleAttachClick}
-            tooltip="Attach files"
-            disabled={disabled}
-          />
+            {/* Context Badges - Files, Sources, Folder */}
+            {/* 1. Attach Files Badge */}
+            <FreeFormInputContextBadge
+              icon={<Paperclip className="h-4 w-4" />}
+              // Show count ("1 file" / "X files") instead of filename for cleaner UI
+              label={attachments.length > 0
+                ? attachments.length === 1
+                  ? "1 file"
+                  : `${attachments.length} files`
+                : "Attach Files"
+              }
+              isExpanded={isEmptySession}
+              hasSelection={attachments.length > 0}
+              showChevron={false}
+              onClick={handleAttachClick}
+              tooltip="Attach files"
+              disabled={disabled}
+            />
 
-          {/* 2. Source Selector Badge - only show if onSourcesChange is provided and not using chat mode selector */}
-          {onSourcesChange && !showChatModeModelSelector && (
-            <div className="relative">
-              <FreeFormInputContextBadge
-                buttonRef={sourceButtonRef}
-                icon={
-                  optimisticSourceSlugs.length === 0 ? (
-                    <DatabaseZap className="h-4 w-4" />
-                  ) : (
-                    <div className="flex items-center -ml-0.5">
-                      {(() => {
-                        const enabledSources = sources.filter(s => optimisticSourceSlugs.includes(s.config.slug))
-                        const displaySources = enabledSources.slice(0, 3)
-                        const remainingCount = enabledSources.length - 3
-                        return (
-                          <>
-                            {displaySources.map((source, index) => (
-                              <div
-                                key={source.config.slug}
-                                className={cn("relative h-5 w-5 rounded-[4px] bg-background shadow-minimal flex items-center justify-center", index > 0 && "-ml-1")}
-                                style={{ zIndex: index + 1 }}
-                              >
-                                <SourceAvatar source={source} size="xs" />
-                              </div>
-                            ))}
-                            {remainingCount > 0 && (
-                              <div
-                                className="-ml-1 h-5 w-5 rounded-[4px] bg-background shadow-minimal flex items-center justify-center text-[8px] font-medium text-muted-foreground"
-                                style={{ zIndex: displaySources.length + 1 }}
-                              >
-                                +{remainingCount}
-                              </div>
-                            )}
-                          </>
-                        )
-                      })()}
-                    </div>
-                  )
-                }
-                label={
-                  optimisticSourceSlugs.length === 0
-                    ? "Choose Sources"
-                    : (() => {
+            {/* 2. Source Selector Badge - show for all modes if onSourcesChange is provided */}
+            {onSourcesChange && (
+              <div className="relative">
+                <FreeFormInputContextBadge
+                  buttonRef={sourceButtonRef}
+                  icon={
+                    optimisticSourceSlugs.length === 0 ? (
+                      <DatabaseZap className="h-4 w-4" />
+                    ) : (
+                      <div className="flex items-center -ml-0.5">
+                        {(() => {
+                          const enabledSources = sources.filter(s => optimisticSourceSlugs.includes(s.config.slug))
+                          const displaySources = enabledSources.slice(0, 3)
+                          const remainingCount = enabledSources.length - 3
+                          return (
+                            <>
+                              {displaySources.map((source, index) => (
+                                <div
+                                  key={source.config.slug}
+                                  className={cn("relative h-5 w-5 rounded-[4px] bg-background shadow-minimal flex items-center justify-center", index > 0 && "-ml-1")}
+                                  style={{ zIndex: index + 1 }}
+                                >
+                                  <SourceAvatar source={source} size="xs" />
+                                </div>
+                              ))}
+                              {remainingCount > 0 && (
+                                <div
+                                  className="-ml-1 h-5 w-5 rounded-[4px] bg-background shadow-minimal flex items-center justify-center text-[8px] font-medium text-muted-foreground"
+                                  style={{ zIndex: displaySources.length + 1 }}
+                                >
+                                  +{remainingCount}
+                                </div>
+                              )}
+                            </>
+                          )
+                        })()}
+                      </div>
+                    )
+                  }
+                  label={
+                    optimisticSourceSlugs.length === 0
+                      ? "Choose Sources"
+                      : (() => {
                         const enabledSources = sources.filter(s => optimisticSourceSlugs.includes(s.config.slug))
                         if (enabledSources.length === 1) return enabledSources[0].config.name
                         if (enabledSources.length === 2) return enabledSources.map(s => s.config.name).join(', ')
                         return `${enabledSources.length} sources`
                       })()
-                }
-                isExpanded={isEmptySession}
-                hasSelection={optimisticSourceSlugs.length > 0}
-                showChevron={true}
-                isOpen={sourceDropdownOpen}
-                disabled={disabled}
-                data-tutorial="source-selector-button"
-                onClick={() => {
-                  if (!sourceDropdownOpen && sourceButtonRef.current) {
-                    const rect = sourceButtonRef.current.getBoundingClientRect()
-                    setSourceDropdownPosition({
-                      top: rect.top,
-                      left: rect.left,
-                    })
-                    // Focus filter input after popover opens
-                    setTimeout(() => sourceFilterInputRef.current?.focus(), 0)
-                  } else {
-                    // Clear filter when closing
-                    setSourceFilter('')
                   }
-                  setSourceDropdownOpen(!sourceDropdownOpen)
-                }}
-                tooltip="Sources"
-              />
-              {sourceDropdownOpen && sourceDropdownPosition && ReactDOM.createPortal(
-                <>
-                  <div
-                    className="fixed inset-0 z-floating-backdrop"
-                    onClick={() => {
-                      setSourceDropdownOpen(false)
+                  isExpanded={isEmptySession}
+                  hasSelection={optimisticSourceSlugs.length > 0}
+                  showChevron={true}
+                  isOpen={sourceDropdownOpen}
+                  disabled={disabled}
+                  data-tutorial="source-selector-button"
+                  onClick={() => {
+                    if (!sourceDropdownOpen && sourceButtonRef.current) {
+                      const rect = sourceButtonRef.current.getBoundingClientRect()
+                      setSourceDropdownPosition({
+                        top: rect.top,
+                        left: rect.left,
+                      })
+                      // Focus filter input after popover opens
+                      setTimeout(() => sourceFilterInputRef.current?.focus(), 0)
+                    } else {
+                      // Clear filter when closing
                       setSourceFilter('')
-                    }}
-                  />
-                  <div
-                    className="fixed z-floating-menu min-w-[200px] overflow-hidden rounded-[8px] bg-background text-foreground shadow-modal-small"
-                    style={{
-                      top: sourceDropdownPosition.top - 8,
-                      left: sourceDropdownPosition.left,
-                      transform: 'translateY(-100%)',
-                    }}
-                  >
-                    {sources.length === 0 ? (
-                      <div className="text-xs text-muted-foreground p-3 select-none">
-                        No sources configured.
-                        <br />
-                        Add sources in Settings.
-                      </div>
-                    ) : (
-                      <CommandPrimitive
-                        className="min-w-[200px]"
-                        shouldFilter={false}
-                      >
-                        <div className="border-b border-border/50 px-3 py-2">
-                          <CommandPrimitive.Input
-                            ref={sourceFilterInputRef}
-                            value={sourceFilter}
-                            onValueChange={setSourceFilter}
-                            placeholder="Search sources..."
-                            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground placeholder:select-none"
-                          />
+                    }
+                    setSourceDropdownOpen(!sourceDropdownOpen)
+                  }}
+                  tooltip="Sources"
+                />
+                {sourceDropdownOpen && sourceDropdownPosition && ReactDOM.createPortal(
+                  <>
+                    <div
+                      className="fixed inset-0 z-floating-backdrop"
+                      onClick={() => {
+                        setSourceDropdownOpen(false)
+                        setSourceFilter('')
+                      }}
+                    />
+                    <div
+                      className="fixed z-floating-menu min-w-[200px] overflow-hidden rounded-[8px] bg-background text-foreground shadow-modal-small"
+                      style={{
+                        top: sourceDropdownPosition.top - 8,
+                        left: sourceDropdownPosition.left,
+                        transform: 'translateY(-100%)',
+                      }}
+                    >
+                      {sources.length === 0 ? (
+                        <div className="text-xs text-muted-foreground p-3 select-none">
+                          No sources configured.
+                          <br />
+                          Add sources in Settings.
                         </div>
-                        <CommandPrimitive.List className="max-h-[240px] overflow-y-auto p-1">
-                          {sources
-                            .filter(source => source.config.name.toLowerCase().includes(sourceFilter.toLowerCase()))
-                            .map((source, index) => {
-                              const isEnabled = optimisticSourceSlugs.includes(source.config.slug)
-                              return (
-                                <CommandPrimitive.Item
-                                  key={source.config.slug}
-                                  value={source.config.slug}
-                                  data-tutorial={index === 0 ? "source-dropdown-item-first" : undefined}
-                                  onSelect={() => {
-                                    const newSlugs = isEnabled
-                                      ? optimisticSourceSlugs.filter(slug => slug !== source.config.slug)
-                                      : [...optimisticSourceSlugs, source.config.slug]
-                                    // Optimistic update - UI updates immediately
-                                    setOptimisticSourceSlugs(newSlugs)
-                                    // Then trigger async server update
-                                    onSourcesChange?.(newSlugs)
-                                  }}
-                                  className={cn(
-                                    "flex cursor-pointer select-none items-center gap-3 rounded-[6px] px-3 py-2 text-[13px]",
-                                    "outline-none data-[selected=true]:bg-foreground/5",
-                                    isEnabled && "bg-foreground/3"
-                                  )}
-                                >
-                                  <div className="shrink-0 text-muted-foreground flex items-center">
-                                    <SourceAvatar
-                                      source={source}
-                                      size="sm"
-                                    />
-                                  </div>
-                                  <div className="flex-1 min-w-0 truncate">{source.config.name}</div>
-                                  <div className={cn(
-                                    "shrink-0 h-4 w-4 rounded-full bg-current flex items-center justify-center",
-                                    !isEnabled && "opacity-0"
-                                  )}>
-                                    <Check className="h-2.5 w-2.5 text-white dark:text-black" strokeWidth={3} />
-                                  </div>
-                                </CommandPrimitive.Item>
-                              )
-                            })}
-                        </CommandPrimitive.List>
-                      </CommandPrimitive>
-                    )}
-                  </div>
-                </>,
-                document.body
-              )}
-            </div>
-          )}
+                      ) : (
+                        <CommandPrimitive
+                          className="min-w-[200px]"
+                          shouldFilter={false}
+                        >
+                          <div className="border-b border-border/50 px-3 py-2">
+                            <CommandPrimitive.Input
+                              ref={sourceFilterInputRef}
+                              value={sourceFilter}
+                              onValueChange={setSourceFilter}
+                              placeholder="Search sources..."
+                              className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground placeholder:select-none"
+                            />
+                          </div>
+                          <CommandPrimitive.List className="max-h-[240px] overflow-y-auto p-1">
+                            {sources
+                              .filter(source => source.config.name.toLowerCase().includes(sourceFilter.toLowerCase()))
+                              .map((source, index) => {
+                                const isEnabled = optimisticSourceSlugs.includes(source.config.slug)
+                                return (
+                                  <CommandPrimitive.Item
+                                    key={source.config.slug}
+                                    value={source.config.slug}
+                                    data-tutorial={index === 0 ? "source-dropdown-item-first" : undefined}
+                                    onSelect={() => {
+                                      const newSlugs = isEnabled
+                                        ? optimisticSourceSlugs.filter(slug => slug !== source.config.slug)
+                                        : [...optimisticSourceSlugs, source.config.slug]
+                                      // Optimistic update - UI updates immediately
+                                      setOptimisticSourceSlugs(newSlugs)
+                                      // Then trigger async server update
+                                      onSourcesChange?.(newSlugs)
+                                    }}
+                                    className={cn(
+                                      "flex cursor-pointer select-none items-center gap-3 rounded-[6px] px-3 py-2 text-[13px]",
+                                      "outline-none data-[selected=true]:bg-foreground/5",
+                                      isEnabled && "bg-foreground/3"
+                                    )}
+                                  >
+                                    <div className="shrink-0 text-muted-foreground flex items-center">
+                                      <SourceAvatar
+                                        source={source}
+                                        size="sm"
+                                      />
+                                    </div>
+                                    <div className="flex-1 min-w-0 truncate">{source.config.name}</div>
+                                    <div className={cn(
+                                      "shrink-0 h-4 w-4 rounded-full bg-current flex items-center justify-center",
+                                      !isEnabled && "opacity-0"
+                                    )}>
+                                      <Check className="h-2.5 w-2.5 text-white dark:text-black" strokeWidth={3} />
+                                    </div>
+                                  </CommandPrimitive.Item>
+                                )
+                              })}
+                          </CommandPrimitive.List>
+                        </CommandPrimitive>
+                      )}
+                    </div>
+                  </>,
+                  document.body
+                )}
+              </div>
+            )}
 
-          {/* 3. Working Directory Selector Badge */}
-          {onWorkingDirectoryChange && (
-            <WorkingDirectoryBadge
-              workingDirectory={workingDirectory}
-              onWorkingDirectoryChange={onWorkingDirectoryChange}
-              sessionFolderPath={sessionFolderPath}
-              isEmptySession={isEmptySession}
-            />
-          )}
+            {/* 3. Working Directory Selector Badge */}
+            {onWorkingDirectoryChange && (
+              <WorkingDirectoryBadge
+                workingDirectory={workingDirectory}
+                onWorkingDirectoryChange={onWorkingDirectoryChange}
+                sessionFolderPath={sessionFolderPath}
+                isEmptySession={isEmptySession}
+              />
+            )}
 
-          {/* Spacer */}
-          <div className="flex-1" />
+            {/* Spacer */}
+            <div className="flex-1" />
 
-          {/* 5a. Chat Mode Sources Selector (next to model picker) */}
-          {showChatModeModelSelector && onSourcesChange && (
-            <ChatModeSourcesSelector
-              sources={sources}
-              enabledSourceSlugs={optimisticSourceSlugs}
-              onChange={(newSlugs) => {
-                setOptimisticSourceSlugs(newSlugs)
-                onSourcesChange?.(newSlugs)
-              }}
-            />
-          )}
 
-          {/* 5a. Chat Mode OpenRouter Model Selector */}
-          {showChatModeModelSelector && (
-            <ChatModelSelector
-              selectedModel={(() => {
-                const isOpenRouterStyle = currentModel.includes('/')
-                const isOpenAIDirect = currentModel.startsWith('gpt-')
-                const [provider, name] = isOpenRouterStyle ? currentModel.split('/', 2) : [undefined, undefined]
-                return {
-                  id: currentModel,
-                  name: isOpenRouterStyle ? (name || currentModel) : currentModel,
-                  provider: isOpenRouterStyle ? (provider || 'OpenAI') : (isOpenAIDirect ? 'OpenAI (Direct)' : 'OpenAI'),
-                  tags: [],
-                }
-              })()}
-              onSelectModel={(model) => onModelChange(model.id)}
-            />
-          )}
 
-          {/* 5. Model Selector - Claude runtime only (Chat mode has its own selector) */}
-          {!hideModelSelector && (
-          <DropdownMenu open={modelDropdownOpen} onOpenChange={setModelDropdownOpen}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className={cn(
-                      "inline-flex items-center h-7 px-1.5 gap-0.5 text-[13px] shrink-0 rounded-[6px] hover:bg-foreground/5 transition-colors select-none",
-                      modelDropdownOpen && "bg-foreground/5"
-                    )}
-                  >
-                    {/* Show custom model name when a custom API connection is active */}
-                    {getModelShortName(customModel || currentModel)}
-                    {!customModel && <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />}
-                  </button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="top">Model</TooltipContent>
-            </Tooltip>
-            <StyledDropdownMenuContent side="top" align="end" sideOffset={8} className="min-w-[240px]">
-              {/* When custom model is active, show it as a static item instead of Anthropic options */}
-              {customModel ? (
-                <StyledDropdownMenuItem
-                  disabled
-                  className="flex items-center justify-between px-2 py-2 rounded-lg"
-                >
-                  <div className="text-left">
-                    <div className="font-medium text-sm">{customModel}</div>
-                    <div className="text-xs text-muted-foreground">Custom API connection</div>
-                  </div>
-                  <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
-                </StyledDropdownMenuItem>
-              ) : (
-                /* Standard Anthropic model options */
-                MODELS.map((model) => {
-                  const isSelected = currentModel === model.id
-                  const descriptions: Record<string, string> = {
-                    'claude-opus-4-5-20251101': 'Most capable for complex work',
-                    'claude-sonnet-4-5-20250929': 'Best for everyday tasks',
-                    'claude-haiku-4-5-20251001': 'Fastest for quick answers',
+            {/* 5a. Chat Mode OpenRouter Model Selector */}
+            {showChatModeModelSelector && (
+              <ChatModelSelector
+                selectedModel={(() => {
+                  const isOpenRouterStyle = currentModel.includes('/')
+                  const isOpenAIDirect = currentModel.startsWith('gpt-')
+                  const [provider, name] = isOpenRouterStyle ? currentModel.split('/', 2) : [undefined, undefined]
+                  return {
+                    id: currentModel,
+                    name: isOpenRouterStyle ? (name || currentModel) : currentModel,
+                    provider: isOpenRouterStyle ? (provider || 'OpenAI') : (isOpenAIDirect ? 'OpenAI (Direct)' : 'OpenAI'),
+                    tags: [],
                   }
-                  return (
+                })()}
+                onSelectModel={(model) => onModelChange(model.id)}
+                className="hover:bg-foreground/5 rounded-[6px]"
+              />
+            )}
+
+            {/* 5. Model Selector - Agent Mode */}
+            {!hideModelSelector && !showChatModeModelSelector && (
+              <DropdownMenu open={modelDropdownOpen} onOpenChange={setModelDropdownOpen}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className={cn(
+                          "inline-flex items-center h-7 px-1.5 gap-0.5 text-[13px] shrink-0 rounded-[6px] hover:bg-foreground/5 transition-colors select-none",
+                          modelDropdownOpen && "bg-foreground/5"
+                        )}
+                      >
+                        {/* Show custom model name when a custom API connection is active */}
+                        {getModelShortName(customModel || currentModel)}
+                        {!customModel && <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />}
+                      </button>
+                    </DropdownMenuTrigger>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">Model</TooltipContent>
+                </Tooltip>
+                <StyledDropdownMenuContent side="top" align="end" sideOffset={8} className="min-w-[240px]">
+                  {/* When custom model is active, show it as a static item instead of Anthropic options */}
+                  {customModel ? (
                     <StyledDropdownMenuItem
-                      key={model.id}
-                      onSelect={() => onModelChange(model.id)}
-                      className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
+                      disabled
+                      className="flex items-center justify-between px-2 py-2 rounded-lg"
                     >
                       <div className="text-left">
-                        <div className="font-medium text-sm">{model.name}</div>
-                        <div className="text-xs text-muted-foreground">{descriptions[model.id] || model.description}</div>
+                        <div className="font-medium text-sm">{customModel}</div>
+                        <div className="text-xs text-muted-foreground">Custom API connection</div>
                       </div>
-                      {isSelected && (
-                        <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
-                      )}
+                      <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
                     </StyledDropdownMenuItem>
-                  )
-                })
-              )}
+                  ) : (
+                    /* Standard Anthropic model options */
+                    MODELS.map((model) => {
+                      const isSelected = currentModel === model.id
+                      const descriptions: Record<string, string> = {
+                        'claude-opus-4-5-20251101': 'Most capable for complex work',
+                        'claude-sonnet-4-5-20250929': 'Best for everyday tasks',
+                        'claude-haiku-4-5-20251001': 'Fastest for quick answers',
+                      }
+                      return (
+                        <StyledDropdownMenuItem
+                          key={model.id}
+                          onSelect={() => onModelChange(model.id)}
+                          className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
+                        >
+                          <div className="text-left">
+                            <div className="font-medium text-sm">{model.name}</div>
+                            <div className="text-xs text-muted-foreground">{descriptions[model.id] || model.description}</div>
+                          </div>
+                          {isSelected && (
+                            <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
+                          )}
+                        </StyledDropdownMenuItem>
+                      )
+                    })
+                  )}
 
-              {/* Thinking level selector — only shown for Claude models (extended thinking is Claude-specific) */}
-              {(!customModel || isClaudeModel(customModel)) && (
-                <>
-                  <StyledDropdownMenuSeparator className="my-1" />
+                  {/* Thinking level selector — only shown for Claude models (extended thinking is Claude-specific) */}
+                  {(!customModel || isClaudeModel(customModel)) && (
+                    <>
+                      <StyledDropdownMenuSeparator className="my-1" />
 
-                  <DropdownMenuSub>
-                    <StyledDropdownMenuSubTrigger className="flex items-center justify-between px-2 py-2 rounded-lg">
-                      <div className="text-left flex-1">
-                        <div className="font-medium text-sm">{getThinkingLevelName(thinkingLevel)}</div>
-                        <div className="text-xs text-muted-foreground">Extended reasoning depth</div>
-                      </div>
-                    </StyledDropdownMenuSubTrigger>
-                    <StyledDropdownMenuSubContent className="min-w-[220px]">
-                      {THINKING_LEVELS.map(({ id, name, description }) => {
-                        const isSelected = thinkingLevel === id
-                        return (
-                          <StyledDropdownMenuItem
-                            key={id}
-                            onSelect={() => onThinkingLevelChange?.(id)}
-                            className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
-                          >
-                            <div className="text-left">
-                              <div className="font-medium text-sm">{name}</div>
-                              <div className="text-xs text-muted-foreground">{description}</div>
-                            </div>
-                            {isSelected && (
-                              <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
+                      <DropdownMenuSub>
+                        <StyledDropdownMenuSubTrigger className="flex items-center justify-between px-2 py-2 rounded-lg">
+                          <div className="text-left flex-1">
+                            <div className="font-medium text-sm">{getThinkingLevelName(thinkingLevel)}</div>
+                            <div className="text-xs text-muted-foreground">Extended reasoning depth</div>
+                          </div>
+                        </StyledDropdownMenuSubTrigger>
+                        <StyledDropdownMenuSubContent className="min-w-[220px]">
+                          {THINKING_LEVELS.map(({ id, name, description }) => {
+                            const isSelected = thinkingLevel === id
+                            return (
+                              <StyledDropdownMenuItem
+                                key={id}
+                                onSelect={() => onThinkingLevelChange?.(id)}
+                                className="flex items-center justify-between px-2 py-2 rounded-lg cursor-pointer"
+                              >
+                                <div className="text-left">
+                                  <div className="font-medium text-sm">{name}</div>
+                                  <div className="text-xs text-muted-foreground">{description}</div>
+                                </div>
+                                {isSelected && (
+                                  <Check className="h-4 w-4 text-foreground shrink-0 ml-3" />
+                                )}
+                              </StyledDropdownMenuItem>
+                            )
+                          })}
+                        </StyledDropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    </>
+                  )}
+
+                  {/* Context usage footer - only show when we have token data */}
+                  {contextStatus?.inputTokens != null && contextStatus.inputTokens > 0 && (
+                    <>
+                      <StyledDropdownMenuSeparator className="my-1" />
+                      <div className="px-2 py-1.5 select-none">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>Context</span>
+                          <span className="flex items-center gap-1.5">
+                            {contextStatus.isCompacting && (
+                              <Loader2 className="h-3 w-3 animate-spin" />
                             )}
-                          </StyledDropdownMenuItem>
-                        )
-                      })}
-                    </StyledDropdownMenuSubContent>
-                  </DropdownMenuSub>
-                </>
-              )}
-
-              {/* Context usage footer - only show when we have token data */}
-              {contextStatus?.inputTokens != null && contextStatus.inputTokens > 0 && (
-                <>
-                  <StyledDropdownMenuSeparator className="my-1" />
-                  <div className="px-2 py-1.5 select-none">
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>Context</span>
-                      <span className="flex items-center gap-1.5">
-                        {contextStatus.isCompacting && (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        )}
-                        {formatTokenCount(contextStatus.inputTokens)}
-                        {/* Show compaction threshold (~77.5% of context window) as the limit,
+                            {formatTokenCount(contextStatus.inputTokens)}
+                            {/* Show compaction threshold (~77.5% of context window) as the limit,
                             since that's when auto-compaction kicks in - not the full context window.
                             Falls back to known model context window when SDK hasn't reported usage yet. */}
-                        {(() => {
-                          const ctxWindow = contextStatus.contextWindow || getModelContextWindow(customModel || currentModel)
-                          return ctxWindow ? (
-                            <span className="opacity-60">/ {formatTokenCount(Math.round(ctxWindow * 0.775))}</span>
-                          ) : null
-                        })()}
-                      </span>
-                    </div>
-                  </div>
-                </>
-              )}
-            </StyledDropdownMenuContent>
-          </DropdownMenu>
-          )}
+                            {(() => {
+                              const ctxWindow = contextStatus.contextWindow || getModelContextWindow(customModel || currentModel)
+                              return ctxWindow ? (
+                                <span className="opacity-60">/ {formatTokenCount(Math.round(ctxWindow * 0.775))}</span>
+                              ) : null
+                            })()}
+                          </span>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </StyledDropdownMenuContent>
+              </DropdownMenu>
+            )}
 
-          {/* 5.5 Context Usage Warning Badge - shows when approaching auto-compaction threshold */}
-          {(() => {
-            // Calculate usage percentage based on compaction threshold (~77.5% of context window),
-            // not the full context window - this gives users meaningful warnings before compaction kicks in.
-            // SDK triggers compaction at ~155k tokens for a 200k context window.
-            // Falls back to known per-model context window when SDK hasn't reported usage yet.
-            const effectiveContextWindow = contextStatus?.contextWindow || getModelContextWindow(customModel || currentModel)
-            const compactionThreshold = effectiveContextWindow
-              ? Math.round(effectiveContextWindow * 0.775)
-              : null
-            const usagePercent = contextStatus?.inputTokens && compactionThreshold
-              ? Math.min(99, Math.round((contextStatus.inputTokens / compactionThreshold) * 100))
-              : null
-            // Show badge when >= 80% of compaction threshold AND not currently compacting
-            const showWarning = usagePercent !== null && usagePercent >= 80 && !contextStatus?.isCompacting
+            {/* 5.5 Context Usage Warning Badge - shows when approaching auto-compaction threshold */}
+            {(() => {
+              // Calculate usage percentage based on compaction threshold (~77.5% of context window),
+              // not the full context window - this gives users meaningful warnings before compaction kicks in.
+              // SDK triggers compaction at ~155k tokens for a 200k context window.
+              // Falls back to known per-model context window when SDK hasn't reported usage yet.
+              const effectiveContextWindow = contextStatus?.contextWindow || getModelContextWindow(customModel || currentModel)
+              const compactionThreshold = effectiveContextWindow
+                ? Math.round(effectiveContextWindow * 0.775)
+                : null
+              const usagePercent = contextStatus?.inputTokens && compactionThreshold
+                ? Math.min(99, Math.round((contextStatus.inputTokens / compactionThreshold) * 100))
+                : null
+              // Show badge when >= 80% of compaction threshold AND not currently compacting
+              const showWarning = usagePercent !== null && usagePercent >= 80 && !contextStatus?.isCompacting
 
-            if (!showWarning) return null
+              if (!showWarning) return null
 
-            const handleCompactClick = () => {
-              if (!isProcessing) {
-                onSubmit('/compact', [])
+              const handleCompactClick = () => {
+                if (!isProcessing) {
+                  onSubmit('/compact', [])
+                }
               }
-            }
 
-            return (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={handleCompactClick}
-                    disabled={isProcessing}
-                    className="inline-flex items-center h-6 px-2 text-[12px] font-medium bg-info/10 rounded-[6px] shadow-tinted select-none cursor-pointer hover:bg-info/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    style={{
-                      '--shadow-color': 'var(--info-rgb)',
-                      color: 'color-mix(in oklab, var(--info) 30%, var(--foreground))',
-                    } as React.CSSProperties}
-                  >
-                    {usagePercent}%
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top">
-                  {isProcessing
-                    ? `${usagePercent}% context used — wait for current operation`
-                    : `${usagePercent}% context used — click to compact`
-                  }
-                </TooltipContent>
-              </Tooltip>
-            )
-          })()}
+              return (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={handleCompactClick}
+                      disabled={isProcessing}
+                      className="inline-flex items-center h-6 px-2 text-[12px] font-medium bg-info/10 rounded-[6px] shadow-tinted select-none cursor-pointer hover:bg-info/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      style={{
+                        '--shadow-color': 'var(--info-rgb)',
+                        color: 'color-mix(in oklab, var(--info) 30%, var(--foreground))',
+                      } as React.CSSProperties}
+                    >
+                      {usagePercent}%
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {isProcessing
+                      ? `${usagePercent}% context used — wait for current operation`
+                      : `${usagePercent}% context used — click to compact`
+                    }
+                  </TooltipContent>
+                </Tooltip>
+              )
+            })()}
 
-          {/* 6. Send/Stop Button - Always show stop when processing */}
-          {isProcessing ? (
-            <Button
-              type="button"
-              size="icon"
-              variant="secondary"
-              className="h-7 w-7 rounded-full shrink-0 hover:bg-foreground/15 active:bg-foreground/20 ml-2"
-              onClick={() => handleStop(false)}
-            >
-              <Square className="h-3 w-3 fill-current" />
-            </Button>
-          ) : (
-            <Button
-              type="submit"
-              size="icon"
-              className="h-7 w-7 rounded-full shrink-0 ml-2"
-              disabled={!hasContent || disabled}
-              data-tutorial="send-button"
-            >
-              <ArrowUp className="h-4 w-4" />
-            </Button>
-          )}
+            {/* 6. Send/Stop Button - Always show stop when processing */}
+            {isProcessing ? (
+              <Button
+                type="button"
+                size="icon"
+                variant="secondary"
+                className="h-7 w-7 rounded-full shrink-0 hover:bg-foreground/15 active:bg-foreground/20 ml-2"
+                onClick={() => handleStop(false)}
+              >
+                <Square className="h-3 w-3 fill-current" />
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                size="icon"
+                className="h-7 w-7 rounded-full shrink-0 ml-2"
+                disabled={!hasContent || disabled}
+                data-tutorial="send-button"
+              >
+                <ArrowUp className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         </div>
       </div>

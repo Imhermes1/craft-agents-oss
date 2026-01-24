@@ -1272,6 +1272,7 @@ export default function App() {
           isWaitingForCode={onboarding.isWaitingForCode}
           onSubmitAuthCode={onboarding.handleSubmitAuthCode}
           onCancelOAuth={onboarding.handleCancelOAuth}
+          onImportCodexAuth={onboarding.handleImportCodexAuth}
         />
       </ModalProvider>
     )
@@ -1283,48 +1284,48 @@ export default function App() {
   // Ready state - main app with splash overlay during data loading
   return (
     <PlatformProvider actions={platformActions}>
-    <ShikiThemeProvider shikiTheme={shikiTheme}>
-      <FocusProvider>
-        <ModalProvider>
-        <TooltipProvider>
-        <NavigationProvider
-          workspaceId={windowWorkspaceId}
-          onCreateSession={handleCreateSession}
-          onInputChange={handleInputChange}
-          isReady={appState === 'ready'}
-        >
-          {/* Handle window close requests (X button, Cmd+W) - close modal first if open */}
-          <WindowCloseHandler />
+      <ShikiThemeProvider shikiTheme={shikiTheme}>
+        <FocusProvider>
+          <ModalProvider>
+            <TooltipProvider>
+              <NavigationProvider
+                workspaceId={windowWorkspaceId}
+                onCreateSession={handleCreateSession}
+                onInputChange={handleInputChange}
+                isReady={appState === 'ready'}
+              >
+                {/* Handle window close requests (X button, Cmd+W) - close modal first if open */}
+                <WindowCloseHandler />
 
-          {/* Splash screen overlay - fades out when fully ready */}
-          {showSplash && (
-            <SplashScreen
-              isExiting={splashExiting}
-              onExitComplete={handleSplashExitComplete}
-            />
-          )}
+                {/* Splash screen overlay - fades out when fully ready */}
+                {showSplash && (
+                  <SplashScreen
+                    isExiting={splashExiting}
+                    onExitComplete={handleSplashExitComplete}
+                  />
+                )}
 
-          {/* Main UI - always rendered, splash fades away to reveal it */}
-          <div className="h-full flex flex-col text-foreground">
-            <div className="flex-1 min-h-0">
-              <AppShell
-                contextValue={appShellContextValue}
-                defaultLayout={[20, 32, 48]}
-                menuNewChatTrigger={menuNewChatTrigger}
-                isFocusedMode={isFocusedMode}
-              />
-            </div>
-            <ResetConfirmationDialog
-              open={showResetDialog}
-              onConfirm={executeReset}
-              onCancel={() => setShowResetDialog(false)}
-            />
-          </div>
-        </NavigationProvider>
-        </TooltipProvider>
-        </ModalProvider>
-      </FocusProvider>
-    </ShikiThemeProvider>
+                {/* Main UI - always rendered, splash fades away to reveal it */}
+                <div className="h-full flex flex-col text-foreground">
+                  <div className="flex-1 min-h-0">
+                    <AppShell
+                      contextValue={appShellContextValue}
+                      defaultLayout={[20, 32, 48]}
+                      menuNewChatTrigger={menuNewChatTrigger}
+                      isFocusedMode={isFocusedMode}
+                    />
+                  </div>
+                  <ResetConfirmationDialog
+                    open={showResetDialog}
+                    onConfirm={executeReset}
+                    onCancel={() => setShowResetDialog(false)}
+                  />
+                </div>
+              </NavigationProvider>
+            </TooltipProvider>
+          </ModalProvider>
+        </FocusProvider>
+      </ShikiThemeProvider>
     </PlatformProvider>
   )
 }

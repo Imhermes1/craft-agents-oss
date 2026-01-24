@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useState, useMemo, useEffect } from 'react'
-import { Search, ChevronDown, Globe, Image, Sparkles, DollarSign, Zap, X, Check, Loader2 } from 'lucide-react'
+import { Search, ChevronDown, ChevronRight, Globe, Image, Sparkles, DollarSign, Zap, X, Check, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
     DropdownMenu,
@@ -19,7 +19,7 @@ import type { OpenRouterModel } from '../../../shared/types'
 
 // Model capabilities/tags derived from model data
 export type ModelTag = 'free' | 'web' | 'image' | 'fast' | 'reasoning' | 'code'
-  | 'tools'
+    | 'tools'
 
 export interface ChatModel {
     id: string
@@ -154,14 +154,14 @@ function convertModel(m: OpenRouterModel): ChatModel {
 
 // Default model to show while loading
 const DEFAULT_MODEL: ChatModel = {
-    id: 'openai/gpt-4o-mini',
-    name: 'GPT-4o Mini',
+    id: 'openai/gpt-oss-120b:free',
+    name: 'GPT-OSS-120B',
     provider: 'OpenAI',
-    description: 'Fast and affordable',
-    tags: ['image', 'fast', 'code', 'tools'],
+    description: 'Free open source model',
+    tags: ['free', 'code'],
     contextLength: 128000,
-    promptPrice: 0.15,
-    completionPrice: 0.6,
+    promptPrice: 0,
+    completionPrice: 0,
 }
 
 export interface ChatModelSelectorProps {
@@ -180,6 +180,7 @@ export function ChatModelSelector({
     const [activeFilters, setActiveFilters] = useState<ModelTag[]>([])
     const [models, setModels] = useState<ChatModel[]>([])
     const [isLoading, setIsLoading] = useState(true)
+    const [gptSectionCollapsed, setGptSectionCollapsed] = useState(true) // Start collapsed
 
     // Fetch models from OpenRouter on mount
     useEffect(() => {
@@ -273,11 +274,12 @@ export function ChatModelSelector({
         <DropdownMenu open={open} onOpenChange={setOpen}>
             <DropdownMenuTrigger asChild>
                 <button className={cn(
-                    "flex items-center gap-1.5 px-2.5 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-foreground/5",
+                    "inline-flex items-center h-7 px-1.5 gap-0.5 text-[13px] shrink-0 rounded-[6px] hover:bg-foreground/5 transition-colors select-none",
+                    open && "bg-foreground/5",
                     className
                 )}>
-                    <span className="font-medium">{selectedModel.name}</span>
-                    <ChevronDown className="h-3.5 w-3.5" />
+                    <span className="truncate max-w-[150px]">{selectedModel.name}</span>
+                    <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
                 </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" side="top" sideOffset={8} className="w-96 p-0">
@@ -328,6 +330,7 @@ export function ChatModelSelector({
                     })}
                 </div>
 
+
                 {/* Model count */}
                 <div className="px-3 py-1.5 text-xs text-muted-foreground border-b border-border">
                     {isLoading ? (
@@ -355,11 +358,19 @@ export function ChatModelSelector({
                         ) : (
                             <>
                                 {gptModels.length > 0 && (
-                                    <div className="px-2 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-                                        GPT (OpenAI Direct)
-                                    </div>
+                                    <button
+                                        onClick={() => setGptSectionCollapsed(!gptSectionCollapsed)}
+                                        className="w-full flex items-center gap-1 px-2 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide hover:bg-muted/30 transition-colors"
+                                    >
+                                        {gptSectionCollapsed ? (
+                                            <ChevronRight className="h-3 w-3" />
+                                        ) : (
+                                            <ChevronDown className="h-3 w-3" />
+                                        )}
+                                        <span>GPT (OpenAI Direct)</span>
+                                    </button>
                                 )}
-                                {gptModels.map((model) => (
+                                {gptModels.length > 0 && !gptSectionCollapsed && gptModels.map((model) => (
                                     <button
                                         key={model.id}
                                         onClick={() => {
