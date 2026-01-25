@@ -30,6 +30,8 @@ export interface SessionMeta {
   lastReadMessageId?: string
   workingDirectory?: string
   enabledSourceSlugs?: string[]
+  /** Path to session folder on disk */
+  sessionFolderPath?: string
   /** Shared viewer URL (if shared via viewer) */
   sharedUrl?: string
   /** Shared session ID in viewer (for revoke) */
@@ -104,6 +106,7 @@ export function extractSessionMeta(session: Session): SessionMeta {
     lastReadMessageId: session.lastReadMessageId,
     workingDirectory: session.workingDirectory,
     enabledSourceSlugs: session.enabledSourceSlugs,
+    sessionFolderPath: session.sessionFolderPath,
     sharedUrl: session.sharedUrl,
     sharedId: session.sharedId,
     lastFinalMessageId,

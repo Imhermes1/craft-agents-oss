@@ -163,7 +163,7 @@ export function MainContentPanel({
   if (isChatNavigation(navState)) {
     return wrapWithStoplight(
       <Panel variant="grow" className={className}>
-        <ChatPage sessionId={navState.details.sessionId} variant="chat" />
+        {navState.details && <ChatPage sessionId={navState.details.sessionId} variant="chat" />}
       </Panel>
     )
   }

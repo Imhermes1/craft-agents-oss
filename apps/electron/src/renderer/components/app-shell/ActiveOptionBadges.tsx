@@ -57,6 +57,12 @@ export interface ActiveOptionBadgesProps {
   labels?: LabelConfig[]
   /** Callback when a label is removed (legacy — prefer onLabelsChange) */
   onRemoveLabel?: (labelId: string) => void
+  /** Callback when session labels array changes (value edits or removals) */
+  onLabelsChange?: (updatedLabels: string[]) => void
+  /** Label ID whose value popover should auto-open (set when a valued label is added via # menu) */
+  autoOpenLabelId?: string | null
+  /** Called after the auto-open has been consumed, so the parent can clear the signal */
+  onAutoOpenConsumed?: () => void
   /** Callback to show terminal output overlay */
   onShowTerminalOverlay?: (data: import('./TaskActionMenu').TerminalOverlayData) => void
   /** Additional CSS classes */
@@ -82,6 +88,9 @@ export function ActiveOptionBadges({
   sessionLabels = [],
   labels = [],
   onRemoveLabel,
+  onLabelsChange,
+  autoOpenLabelId = null,
+  onAutoOpenConsumed,
   onShowTerminalOverlay,
   className,
 }: ActiveOptionBadgesProps) {

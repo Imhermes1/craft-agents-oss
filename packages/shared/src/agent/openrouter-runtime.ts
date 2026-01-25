@@ -922,7 +922,7 @@ export class OpenRouterRuntime {
   /**
    * Single-shot ultrathink override (compatibility no-op for now).
    */
-  setUltrathinkoOverride(enabled: boolean): void {
+  setUltrathinkOverride(enabled: boolean): void {
     this.ultrathinkoVerrideEnabled = enabled
   }
 

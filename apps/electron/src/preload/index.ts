@@ -411,6 +411,14 @@ const api: ElectronAPI = {
   getGitBranch: (dirPath: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.GET_GIT_BRANCH, dirPath),
 
+  // OpenAI / Codex
+  getOpenAIOAuthConfigured: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.OPENAI_GET_OAUTH_CONFIGURED),
+  importCodexAuth: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.OPENAI_IMPORT_CODEX_AUTH),
+  deleteOpenAIOAuth: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.OPENAI_DELETE_OAUTH),
+
   // OpenRouter
   getOpenRouterModels: () =>
     ipcRenderer.invoke(IPC_CHANNELS.OPENROUTER_GET_MODELS),

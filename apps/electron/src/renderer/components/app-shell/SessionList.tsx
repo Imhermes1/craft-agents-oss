@@ -403,10 +403,10 @@ function SessionItem({
                     )}
                     {/* Label badges — solid color via color-mix in sRGB */}
                     {resolvedLabels.map(label => {
-                      const color = label.color ? resolveEntityColor(label.color, isDark) : null
+                      const color = label.config.color ? resolveEntityColor(label.config.color, isDark) : null
                       return (
                         <span
-                          key={label.id}
+                          key={label.config.id}
                           className="shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded flex items-center whitespace-nowrap"
                           style={color ? {
                             backgroundColor: `color-mix(in srgb, ${color} 6%, transparent)`,
@@ -416,7 +416,7 @@ function SessionItem({
                             color: 'rgba(var(--foreground-rgb), 0.6)',
                           }}
                         >
-                          {label.name}
+                          {label.config.name}
                         </span>
                       )
                     })}
@@ -899,11 +899,9 @@ export function SessionList({
         <EmptyContent>
           <button
             onClick={() => {
-              // Create a new session, applying the current filter's status/label if applicable
-              const params: { status?: string; label?: string } = {}
-              if (currentFilter?.kind === 'state') params.status = currentFilter.stateId
-              else if (currentFilter?.kind === 'label') params.label = currentFilter.labelId
-              navigate(routes.action.newChat(Object.keys(params).length > 0 ? params : undefined))
+              // Create a new session
+              // Note: Filter context is not passed to newChat action
+              navigate(routes.action.newChat())
             }}
             className="inline-flex items-center h-7 px-3 text-xs font-medium rounded-[8px] bg-background shadow-minimal hover:bg-foreground/[0.03] transition-colors"
           >

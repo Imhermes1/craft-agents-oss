@@ -978,15 +978,16 @@ function AppShellContent({
 
             // Otherwise open/switch it
             // Determine best path for integrated terminal
-            let path = session?.workingDirectory
-            if (session?.enabledSourceSlugs && session?.enabledSourceSlugs.length > 0 && sources) {
-              const firstSourceSlug = session.enabledSourceSlugs[0]
+            const currentSessionMeta = session.selected ? sessionMetaMap.get(session.selected) : null
+            let path = currentSessionMeta?.workingDirectory
+            if (currentSessionMeta?.enabledSourceSlugs && currentSessionMeta.enabledSourceSlugs.length > 0 && sources) {
+              const firstSourceSlug = currentSessionMeta.enabledSourceSlugs[0]
               const source = sources.find(s => s.config.slug === firstSourceSlug)
               if (source?.config.type === 'local' && source.config.local?.path) {
                 path = source.config.local.path
               }
             }
-            path = path || session?.sessionFolderPath
+            path = path || currentSessionMeta?.sessionFolderPath
 
             if (!path) {
               window.electronAPI.getHomeDir().then(home => {
