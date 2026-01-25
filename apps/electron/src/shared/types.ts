@@ -569,6 +569,7 @@ export const IPC_CHANNELS = {
   OPEN_URL: 'shell:openUrl',
   OPEN_FILE: 'shell:openFile',
   SHOW_IN_FOLDER: 'shell:showInFolder',
+  OPEN_TERMINAL: 'shell:openTerminal',
 
   // Menu actions (main → renderer)
   MENU_NEW_CHAT: 'menu:newChat',
@@ -621,6 +622,9 @@ export const IPC_CHANNELS = {
   DRAFTS_SET: 'drafts:set',
   DRAFTS_DELETE: 'drafts:delete',
   DRAFTS_GET_ALL: 'drafts:getAll',
+
+  // Shell operations
+  RUN_COMMAND: 'shell:runCommand',
 
   // Sources (workspace-scoped)
   SOURCES_GET: 'sources:get',
@@ -705,10 +709,6 @@ export const IPC_CHANNELS = {
 
   // Sources - Call MCP Tool
   SOURCES_CALL_MCP_TOOL: 'sources:callMcpTool',
-
-  // Apple Reminders
-  APPLE_REMINDERS_GET: 'appleReminders:get',
-  APPLE_REMINDERS_COMPLETE: 'appleReminders:complete',
 
   // OpenRouter
   OPENROUTER_GET_MODELS: 'openRouter:getModels',
@@ -800,6 +800,8 @@ export interface ElectronAPI {
   openUrl(url: string): Promise<void>
   openFile(path: string): Promise<void>
   showInFolder(path: string): Promise<void>
+  openTerminal(path: string): Promise<void>
+  runCommand(command: string, cwd?: string): Promise<{ stdout: string; stderr: string; exitCode: number }>
 
   // Menu event listeners
   onMenuNewChat(callback: () => void): () => void
@@ -1045,6 +1047,7 @@ export type RightSidebarPanel =
   | { type: 'sessionMetadata' }
   | { type: 'files'; path?: string }
   | { type: 'history' }
+  | { type: 'terminal'; path?: string }
   | { type: 'none' }
 
 /**

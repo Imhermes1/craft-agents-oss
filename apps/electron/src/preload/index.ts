@@ -110,6 +110,8 @@ const api: ElectronAPI = {
 
   // Shell operations
   openUrl: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.OPEN_URL, url),
+  openTerminal: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.OPEN_TERMINAL, path),
+  runCommand: (command: string, cwd?: string) => ipcRenderer.invoke(IPC_CHANNELS.RUN_COMMAND, command, cwd),
   openFile: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.OPEN_FILE, path),
   showInFolder: (path: string) => ipcRenderer.invoke(IPC_CHANNELS.SHOW_IN_FOLDER, path),
 

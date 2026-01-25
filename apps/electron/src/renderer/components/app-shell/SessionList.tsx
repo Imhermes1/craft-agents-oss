@@ -382,11 +382,11 @@ function SessionItem({
                     )}
                     {item.runtime === 'openrouter-chat' ? (
                       <span className="shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded flex items-center whitespace-nowrap bg-indigo-500/10 text-indigo-500">
-                        Chat Mode
+                        Chat
                       </span>
                     ) : (
                       <span className="shrink-0 h-[18px] px-1.5 text-[10px] font-medium rounded flex items-center whitespace-nowrap bg-emerald-500/10 text-emerald-500">
-                        Agent Mode
+                        Agent
                       </span>
                     )}
                     {/* Label badges — solid color via color-mix in sRGB */}

@@ -23,6 +23,7 @@ import {
   FolderOpen,
   HelpCircle,
   ExternalLink,
+  Terminal,
 } from "lucide-react"
 import { PanelRightRounded } from "../icons/PanelRightRounded"
 import { PanelLeftRounded } from "../icons/PanelLeftRounded"
@@ -243,7 +244,7 @@ function AppShellContent({
   const rightSidebarHandleRef = React.useRef<HTMLDivElement>(null)
   const [session, setSession] = useSession()
   const { resolvedMode, isDark } = useTheme()
-  const { canGoBack, canGoForward, goBack, goForward, navigateToSource } = useNavigation()
+  const { canGoBack, canGoForward, goBack, goForward, navigateToSource, updateRightSidebar } = useNavigation()
 
   // Double-Esc interrupt feature: first Esc shows warning, second Esc interrupts
   const { handleEscapePress } = useEscapeInterrupt()
@@ -282,6 +283,10 @@ function AppShellContent({
   }, [navFilterKey])
 
   // Sync appMode state with the active navigation state
+  // Sync appMode state with the active navigation state
+  // DISABLED: This causes "random switching" bugs reported by user.
+  // We should trust the `appMode` state (which persists to storage) and only change it on manual toggle.
+  /*
   React.useEffect(() => {
     if (isChatNavigation(navState)) {
       setAppMode('chat')
@@ -289,6 +294,7 @@ function AppShellContent({
       setAppMode('agent')
     }
   }, [navState])
+  */
 
   // Handle manual appMode toggle from the header
   const handleModeChange = React.useCallback((newMode: AppMode) => {
@@ -859,12 +865,58 @@ function AppShellContent({
         animate={{ opacity: isRightSidebarVisible ? 0 : 1 }}
         transition={{ duration: 0.15 }}
         style={{ pointerEvents: isRightSidebarVisible ? 'none' : 'auto' }}
+        className="flex items-center gap-1"
       >
         <HeaderIconButton
+          icon={<Terminal className="h-5 w-5" />}
+          onClick={() => {
+            // TOGGLE LOGIC: If terminal is already open, close it
+            if (isRightSidebarVisible && navState.rightSidebar?.type === 'terminal') {
+              setIsRightSidebarVisible(false)
+              return
+            }
+
+            // Otherwise open/switch it
+            // Determine best path for integrated terminal
+            let path = session?.workingDirectory
+            if (session?.enabledSourceSlugs && session?.enabledSourceSlugs.length > 0 && sources) {
+              const firstSourceSlug = session.enabledSourceSlugs[0]
+              const source = sources.find(s => s.config.slug === firstSourceSlug)
+              if (source?.config.type === 'local' && source.config.local?.path) {
+                path = source.config.local.path
+              }
+            }
+            path = path || session?.sessionFolderPath
+
+            if (!path) {
+              window.electronAPI.getHomeDir().then(home => {
+                updateRightSidebar?.({ type: 'terminal', path: home })
+                setIsRightSidebarVisible(true)
+              })
+            } else {
+              updateRightSidebar?.({ type: 'terminal', path })
+              setIsRightSidebarVisible(true)
+            }
+          }}
+          tooltip="Toggle Terminal"
+          className={cn("text-foreground", isRightSidebarVisible && navState.rightSidebar?.type === 'terminal' && "bg-accent/20")}
+        />
+        <HeaderIconButton
           icon={<PanelRightRounded className="h-5 w-6" />}
-          onClick={() => setIsRightSidebarVisible(true)}
-          tooltip="Open sidebar"
-          className="text-foreground"
+          onClick={() => {
+            // TOGGLE LOGIC: If session metadata is open, close sidebar
+            // If sidebar is closed or showing something else, open metadata
+            const isMetadataOpen = isRightSidebarVisible && (!navState.rightSidebar || navState.rightSidebar.type === 'sessionMetadata')
+
+            if (isMetadataOpen) {
+              setIsRightSidebarVisible(false)
+            } else {
+              updateRightSidebar?.({ type: 'sessionMetadata' })
+              setIsRightSidebarVisible(true)
+            }
+          }}
+          tooltip="Toggle Sidebar"
+          className={cn("text-foreground", isRightSidebarVisible && (!navState.rightSidebar || navState.rightSidebar.type === 'sessionMetadata') && "bg-accent/20")}
         />
       </motion.div>
     )
@@ -2038,7 +2090,7 @@ function AppShellContent({
                     style={{ width: rightSidebarWidth }}
                   >
                     <RightSidebar
-                      panel={{ type: 'sessionMetadata' }}
+                      panel={navState.rightSidebar && navState.rightSidebar.type !== 'none' ? navState.rightSidebar : { type: 'sessionMetadata' }}
                       sessionId={(isChatsNavigation(navState) || isChatNavigation(navState)) && navState.details ? navState.details.sessionId : undefined}
                       closeButton={rightSidebarCloseButton}
                     />
@@ -2071,7 +2123,7 @@ function AppShellContent({
                     >
                       <div className="h-full bg-foreground-2 overflow-hidden shadow-strong rounded-[12px]">
                         <RightSidebar
-                          panel={{ type: 'sessionMetadata' }}
+                          panel={navState.rightSidebar && navState.rightSidebar.type !== 'none' ? navState.rightSidebar : { type: 'sessionMetadata' }}
                           sessionId={(isChatsNavigation(navState) || isChatNavigation(navState)) && navState.details ? navState.details.sessionId : undefined}
                           closeButton={rightSidebarCloseButton}
                         />

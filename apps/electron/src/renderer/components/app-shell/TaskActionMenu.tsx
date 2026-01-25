@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { ChevronDown, Square, ArrowUpRight } from 'lucide-react'
+import { ChevronDown, Square, ArrowUpRight, Terminal, Bot } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -136,7 +136,8 @@ export function TaskActionMenu({ task, sessionId, onKillTask, onInsertMessage, o
           </div>
 
           {/* Type badge */}
-          <span className="opacity-60">
+          <span className="opacity-60 flex items-center gap-1.5">
+            {task.type === 'agent' ? <Bot className="w-3.5 h-3.5" /> : <Terminal className="w-3.5 h-3.5" />}
             {task.type === 'agent' ? 'Task' : 'Shell'}
           </span>
 

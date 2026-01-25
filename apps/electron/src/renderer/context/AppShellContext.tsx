@@ -123,6 +123,9 @@ export interface AppShellContextType {
 
   // Right sidebar button (for page headers)
   rightSidebarButton?: React.ReactNode
+
+  // Manually update right sidebar panel (e.g. for opening terminal)
+  updateRightSidebar?: (panel: import('../../shared/types').RightSidebarPanel) => void
 }
 
 const AppShellContext = createContext<AppShellContextType | null>(null)

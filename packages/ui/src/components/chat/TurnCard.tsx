@@ -19,6 +19,9 @@ import {
   ListTodo,
   Pencil,
   FilePenLine,
+  Terminal,
+  Search,
+  FolderSearch,
 } from 'lucide-react'
 import * as ReactDOM from 'react-dom'
 import { cn } from '../../lib/utils'
@@ -605,6 +608,15 @@ function ActivityStatusIcon({
       if (toolName === 'Write') {
         return <FilePenLine className={cn(SIZE_CONFIG.iconSize, "shrink-0 text-accent")} />
       }
+      if (toolName === 'Bash') {
+        return <Terminal className={cn(SIZE_CONFIG.iconSize, "shrink-0 text-accent")} />
+      }
+      if (toolName === 'Grep') {
+        return <Search className={cn(SIZE_CONFIG.iconSize, "shrink-0 text-accent")} />
+      }
+      if (toolName === 'Glob') {
+        return <FolderSearch className={cn(SIZE_CONFIG.iconSize, "shrink-0 text-accent")} />
+      }
       return <CheckCircle2 className={cn(SIZE_CONFIG.iconSize, "shrink-0 text-success")} />
     case 'error':
       return <XCircle className={cn(SIZE_CONFIG.iconSize, "shrink-0 text-destructive")} />
@@ -907,8 +919,8 @@ function ActivityGroupRow({ group, expandedGroups: externalExpandedGroups, onExp
             )}
             {group.taskOutputData.durationMs !== undefined &&
               (group.taskOutputData.inputTokens !== undefined || group.taskOutputData.outputTokens !== undefined) && (
-              <span className="mx-1">·</span>
-            )}
+                <span className="mx-1">·</span>
+              )}
             {(group.taskOutputData.inputTokens !== undefined || group.taskOutputData.outputTokens !== undefined) && (
               <span>
                 {formatTokens((group.taskOutputData.inputTokens || 0) + (group.taskOutputData.outputTokens || 0))} tokens

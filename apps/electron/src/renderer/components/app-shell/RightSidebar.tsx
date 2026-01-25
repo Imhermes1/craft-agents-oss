@@ -42,8 +42,13 @@ export function RightSidebar({ panel, sessionId, closeButton }: RightSidebarProp
         </div>
       )
 
+    case 'terminal':
+      return <TerminalPanel initialCwd={panel.path} closeButton={closeButton} />
+
     case 'none':
     default:
       return null
   }
 }
+
+import { TerminalPanel } from './right-sidebar/TerminalPanel'

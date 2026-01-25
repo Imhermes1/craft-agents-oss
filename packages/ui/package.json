@@ -13,6 +13,7 @@
     "./chat/TurnCard": "./src/components/chat/TurnCard.tsx",
     "./chat/turn-utils": "./src/components/chat/turn-utils.ts",
     "./markdown": "./src/components/markdown/index.ts",
+    "./components/terminal/TerminalOutput": "./src/components/terminal/TerminalOutput.tsx",
     "./context": "./src/context/index.ts",
     "./styles": "./src/styles/index.css"
   },

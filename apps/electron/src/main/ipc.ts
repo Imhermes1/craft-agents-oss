@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { normalize, isAbsolute, join, basename, dirname, resolve, relative } from 'path'
 import { homedir, tmpdir } from 'os'
 import { randomUUID } from 'crypto'
-import { execSync } from 'child_process'
+import { execSync, exec } from 'child_process'
 import { SessionManager } from './sessions'
 import { ipcLog, windowLog } from './logger'
 import { WindowManager } from './window-manager'
@@ -853,6 +853,54 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
       const message = error instanceof Error ? error.message : 'Unknown error'
       ipcLog.error('openUrl error:', message)
       throw new Error(`Failed to open URL: ${message}`)
+    }
+  })
+
+  // Shell operations - open terminal at path
+  ipcMain.handle(IPC_CHANNELS.OPEN_TERMINAL, async (_event, path: string) => {
+    try {
+      // Relaxed validation for Terminal - allows opening system folders/roots as requested
+      // We still normalize but don't restrict to user home
+      const safePath = normalize(path)
+
+      if (process.platform === 'darwin') {
+        exec(`open -a Terminal "${safePath}"`)
+      } else if (process.platform === 'win32') {
+        exec(`start cmd /k "cd /d ${safePath}"`)
+      } else {
+        // Linux generic fallback
+        // Try generic terminal emulator
+        exec(`x-terminal-emulator --working-directory="${safePath}" || gnome-terminal --working-directory="${safePath}" || xterm -e "cd ${safePath} && $SHELL"`)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      ipcLog.error('openTerminal error:', message)
+      // Best effort - don't crash if unrelated
+    }
+  })
+
+  // Run shell command and return output
+  ipcMain.handle(IPC_CHANNELS.RUN_COMMAND, async (_event, command: string, cwd?: string) => {
+    try {
+      // Validate cwd if provided
+      let safeCwd = cwd
+      if (cwd) {
+        // Just normalize, don't restrict too much as user wants "root access" feels
+        safeCwd = normalize(cwd)
+      }
+
+      return new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+        exec(command, { cwd: safeCwd, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+          resolve({
+            stdout: stdout || '',
+            stderr: stderr || '',
+            exitCode: error ? error.code || 1 : 0
+          })
+        })
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error'
+      return { stdout: '', stderr: message, exitCode: 1 }
     }
   })
 
@@ -1928,93 +1976,6 @@ export function registerIpcHandlers(sessionManager: SessionManager, windowManage
     }
   })
 
-  // ============================================================
-  // Apple Reminders (Native AppleScript)
-  // ============================================================
-
-  // Get reminders using AppleScript
-  ipcMain.handle(IPC_CHANNELS.APPLE_REMINDERS_GET, async () => {
-    try {
-      // AppleScript to get reminders from all lists (limited to 50 total for performance)
-      const script = `
-        tell application "Reminders"
-          set allReminders to {}
-          set listNames to name of every list
-          repeat with listName in listNames
-            try
-              set remindersList to reminders of list listName
-              set allReminders to allReminders & remindersList
-            end try
-          end repeat
-
-          set output to "["
-          set reminderCount to 0
-          repeat with aReminder in allReminders
-            if reminderCount ≥ 50 then exit repeat
-
-            set reminderName to name of aReminder
-            set isCompleted to completed of aReminder
-            set reminderID to id of aReminder
-            set dueDate to missing value
-            try
-              set dueDate to due date of aReminder
-            end try
-
-            if reminderCount > 0 then set output to output & ","
-            set output to output & "{"
-            set output to output & "\\"name\\":\\"" & reminderName & "\\""
-            set output to output & ",\\"completed\\":" & isCompleted
-            set output to output & ",\\"id\\":\\"" & reminderID & "\\""
-            if dueDate is not missing value then
-              set output to output & ",\\"dueDate\\":\\"" & (dueDate as string) & "\\""
-            end if
-            set output to output & "}"
-
-            set reminderCount to reminderCount + 1
-          end repeat
-          set output to output & "]"
-          return output
-        end tell
-      `
-
-      const result = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
-        encoding: 'utf8',
-        maxBuffer: 1024 * 1024 * 10, // 10MB buffer
-        timeout: 5000 // 5 second timeout
-      })
-
-      // Parse JSON output
-      const reminders = JSON.parse(result.trim())
-
-      ipcLog.info(`[AppleReminders] Fetched ${reminders.length} reminders`)
-      return { success: true, reminders }
-    } catch (error) {
-      ipcLog.error('[AppleReminders] Failed to fetch reminders:', error)
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch reminders' }
-    }
-  })
-
-  // Complete a reminder using AppleScript
-  ipcMain.handle(IPC_CHANNELS.APPLE_REMINDERS_COMPLETE, async (_event, reminderName: string) => {
-    try {
-      const script = `
-        tell application "Reminders"
-          set targetReminder to first reminder of list "Reminders" whose name is "${reminderName.replace(/"/g, '\\"')}"
-          set completed of targetReminder to true
-        end tell
-      `
-
-      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
-        encoding: 'utf8'
-      })
-
-      ipcLog.info(`[AppleReminders] Completed reminder: ${reminderName}`)
-      return { success: true }
-    } catch (error) {
-      ipcLog.error(`[AppleReminders] Failed to complete reminder ${reminderName}:`, error)
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to complete reminder' }
-    }
-  })
 
   // ============================================================
   // Status Management (Workspace-scoped)
