@@ -1,6 +1,6 @@
-appId: com.lukilabs.craft-agent
-productName: Craft Agents
-copyright: Copyright © 2025 Craft Docs Ltd.
+appId: com.lukefornieri.craft-agent-custom
+productName: Craft Agents Custom
+copyright: Copyright © 2025 Luke Fornieri
 
 electronVersion: "39.2.7"
 

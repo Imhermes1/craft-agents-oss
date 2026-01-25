@@ -30,9 +30,9 @@ if (isDebugMode) {
   setPerfEnabled(true)
 }
 
-// Custom URL scheme for deeplinks (e.g., craftagents://auth-complete)
-// Supports multi-instance dev: CRAFT_DEEPLINK_SCHEME env var (craftagents1, craftagents2, etc.)
-const DEEPLINK_SCHEME = process.env.CRAFT_DEEPLINK_SCHEME || 'craftagents'
+// Custom URL scheme for deeplinks (e.g., craftagentscustom://auth-complete)
+// Supports multi-instance dev: CRAFT_DEEPLINK_SCHEME env var
+const DEEPLINK_SCHEME = process.env.CRAFT_DEEPLINK_SCHEME || 'craftagentscustom'
 
 let windowManager: WindowManager | null = null
 let sessionManager: SessionManager | null = null
@@ -42,7 +42,7 @@ let pendingDeepLink: string | null = null
 
 // Set app name early (before app.whenReady) to ensure correct macOS menu bar title
 // Supports multi-instance dev: CRAFT_APP_NAME env var (e.g., "Craft Agents [1]")
-app.setName(process.env.CRAFT_APP_NAME || 'Craft Agents')
+app.setName(process.env.CRAFT_APP_NAME || 'Craft Agents Custom')
 
 // Register as default protocol client for craftagents:// URLs
 // This must be done before app.whenReady() on some platforms
