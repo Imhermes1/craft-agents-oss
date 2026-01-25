@@ -47,6 +47,7 @@ import type { RichTextInputHandle } from "@/components/ui/rich-text-input"
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks"
 import type { SessionMeta } from "@/atoms/sessions"
 import { CHAT_LAYOUT } from "@/config/layout"
+import { flattenLabels } from "@craft-agent/shared/labels"
 
 // ============================================================================
 // Overlay State Types
@@ -396,6 +397,10 @@ export function ChatDisplay({
   const { tasks: backgroundTasks, killTask } = useBackgroundTasks({
     sessionId: session?.id ?? ''
   })
+
+  // Track which label should auto-open its value popover after being added via # menu.
+  // Set when a valued label is selected, cleared once the popover opens.
+  const [autoOpenLabelId, setAutoOpenLabelId] = useState<string | null>(null)
 
   // Focus textarea when session changes (tab switch) or zone gains focus via keyboard
   useEffect(() => {
@@ -1026,6 +1031,7 @@ export function ChatDisplay({
           onClose={handleCloseOverlay}
           content={overlayState.content}
           title={overlayState.title}
+          theme={isDark ? 'dark' : 'light'}
         />
       )}
 
@@ -1036,6 +1042,7 @@ export function ChatDisplay({
           onClose={handleCloseOverlay}
           content={overlayData.content}
           title={overlayData.title}
+          theme={isDark ? 'dark' : 'light'}
         />
       )}
     </div>
