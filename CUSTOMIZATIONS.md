@@ -5,7 +5,7 @@ This fork is customized to run alongside the official Craft Agents app without c
 ## What Was Changed
 
 ### 1. App Identity
-- **Bundle ID:** `com.lukefornieri.craft-agent-custom` (was: `com.lukilabs.craft-agent`)
+- **Bundle ID:** `com.custom.craft-agent-custom` (was: `com.lukilabs.craft-agent`)
 - **Product Name:** "Craft Agents Custom" (was: "Craft Agents")
 - **Deep Link Scheme:** `craftagentscustom://` (was: `craftagents://`)
 
@@ -114,5 +114,4 @@ git push origin main
 
 ---
 
-**Your fork:** https://github.com/Imhermes1/craft-agents-oss
 **Upstream:** https://github.com/lukilabs/craft-agents-oss
